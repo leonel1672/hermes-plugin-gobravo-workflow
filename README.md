@@ -13,7 +13,7 @@ Un pill en la barra de estado (con el logo de Bravo) abre un panel con pestañas
 | **PRs** | PRs de la org que esperan tu review (`review-requested:@me`) y PRs propios, con botones compactos de aprobar/review y detalle inline |
 | **Tasks** | Tasks activas de los squads seleccionados, con buscador, detalle inline y configuración del modelo de IA por estado |
 | **Tracks** | Tus tracks agrupados por estado (backlog → shaping → todo → in_progress → in_review), secciones colapsables y transiciones directas |
-| **Config** | Tokens (Hub, GitHub, Token Gate) y webhook de ayuda |
+| **Config** | Tokens (Hub, GitHub) y webhook de ayuda; selección de provider/modelo para transiciones |
 
 ## 👥 Tab Equipo (condicional por rol)
 
@@ -61,8 +61,9 @@ node build.js
 |---|---|
 | **Hub (Gobravo)** | Leer tracks/tasks/projects, tus métricas, equipos y stats del squad desde `hub.gobravo.io` |
 | **GitHub** | Buscar PRs, comentarios de review y aprobar vía API de GitHub |
-| **Token Gate** *(opcional)* | Usar el modelo por estado en el tab de Tasks |
 | **Webhook** *(opcional)* | Botón de ayuda que abre/notifica tu webhook de Google Chat |
+
+> **Nota sobre modelos**: en el tab **Tasks**, las transiciones de estado pueden cambiar el modelo de la sesión de Hermes (via `config.set model ... --provider <provider>`). El provider se selecciona en Config (tokengate / deepseek) y es el **provider de Hermes ya configurado**, no una API key aparte del plugin.
 
 ## 🔧 Instalación
 
