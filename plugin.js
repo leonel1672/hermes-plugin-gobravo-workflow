@@ -18,7 +18,11 @@ const STORAGE_TICKETS_SQUADS = `hermes-plugin-${ID}-tickets-squads`
 const STORAGE_PR_MESSAGE = `hermes-plugin-${ID}-pr-message`
 const STORAGE_SIDEBAR_COLLAPSED = `hermes-plugin-${ID}-sidebar-collapsed`
 const STORAGE_TRACK_RULES = `hermes-plugin-${ID}-track-rules`
+const STORAGE_AI_PROVIDER = `hermes-plugin-${ID}-ai-provider`
+const STORAGE_AI_MODEL = `hermes-plugin-${ID}-ai-model`
+const STORAGE_AI_PROMPT = `hermes-plugin-${ID}-ai-prompt`
 const PR_MESSAGE_DEFAULT = '👋 Team, cuando puedan échenme la mano con el code review de este PR:\n\n📌 {title}\n🔗 {url}\n#{number} · {repo}'
+const AI_PROMPT_DEFAULT = 'Analiza los {N} tickets del tracker (tasks y tracks) que se te dan y produce un DIAGNÓSTICO OPERATIVO de este squad. NO hagas un resumen genérico: identifica causas raíz y da acciones concretas.\n\nUsa exactamente este formato:\n\n## 1. Dolencias por dominio\nAgrupa los tickets por causa raíz / dominio real (pagos, asignación de clientes, mensajería, auth, UI, deuda técnica, datos, etc.). Para cada grupo:\n- **Nombre del dominio** — X de {N} tickets (YY%)\n- El patrón que los une (qué falla y por qué)\n- 2-3 códigos de ticket como evidencia\n\n## 2. Cuellos de botella\n- Tickets atascados en shaping/todo SIN due_date (indica cuánto llevan sin moverse)\n- Items de prioridad high que llevan mucho tiempo en backlog\n- Concentración de trabajo en un solo owner\n\n## 3. Riesgos de revenue / operación\n- Bugs en flujos críticos (cobro, pago, suspensión, asignación, mensajería)\n- Tickets de clientes que se repiten o se escalan\n- Items con due_date vencido o muy próximo\n\n## 4. Plan de acción (máximo 3 acciones)\nPara cada una: qué hacer, a quién asignar (según ownership detectado), y por qué va primero.\n\nReglas:\n- Cita códigos de ticket reales (TRACKER-...)\n- Distingue tracks (proyectos/épicas) de tasks (bugs/tickets puntuales)\n- Sé concreto y breve; no rellenes secciones vacías con "nada que reportar".'
 const HUB_BASE = 'https://hub.gobravo.io/api/v1'
 
 // ── StatusTab constants ────────────────────────────────────────────
@@ -2267,6 +2271,78 @@ function TicketsTab({ hubToken }) {
   var hasComments = _l[0]
   var setHasComments = _l[1]
 
+  // Estado del diagnóstico IA
+  var _m = useState('idle')  // idle | analyzing | done | error
+  var aiState = _m[0]
+  var setAiState = _m[1]
+  var _n = useState(null)  // texto del diagnóstico (markdown)
+  var dxResult = _n[0]
+  var setDxResult = _n[1]
+
+  function runDiagnosis() {
+    var items = (lowerQuery ? filteredTasks : baseTasks)
+    if (!items || items.length === 0) {
+      host.notifyError('❌ No hay tickets para diagnosticar en la selección actual')
+      return
+    }
+    setAiState('analyzing')
+    setDxResult(null)
+    // Arma el input con los tickets visibles (límite 60 para no inflar el contexto)
+    var top = items.slice(0, 60)
+    var lines = top.map(function (item) {
+      var parts = [
+        '- [' + (item.code || item.id) + '] ' + (item.name || '(sin nombre)'),
+        'tipo=' + (item.type || '?'),
+      ]
+      if (item.metadata && item.metadata.track_type) parts.push('track_type=' + item.metadata.track_type)
+      parts.push('estado=' + (item.status || '?'))
+      if (item.metadata && item.metadata.priority) parts.push('prioridad=' + item.metadata.priority)
+      if (item.owner_email || (item.owner && item.owner.name)) parts.push('owner=' + (item.owner && item.owner.name ? item.owner.name : item.owner_email))
+      if (item.due_date) parts.push('due=' + item.due_date)
+      if (item.squads && item.squads.length) parts.push('squad=' + item.squads.map(function (s) { return s.name }).join(','))
+      return parts.join(' · ')
+    }).join('\n')
+    // Prompt editable desde Config (STORAGE_AI_PROMPT) con {N} sustituido
+    var rawPrompt = loadStr(STORAGE_AI_PROMPT) || AI_PROMPT_DEFAULT
+    var instructions = rawPrompt
+      .split('{N}').join(String(top.length))
+    var input = top.length + ' tickets:\n' + lines
+    // Usa la task auxiliar 'analysis_tickets' (provider/modelo desde Config)
+    host.request('llm.oneshot', {
+      session_id: host.state.activeSessionId ? host.state.activeSessionId.get() : null,
+      task: 'analysis_tickets',
+      instructions: instructions,
+      input: input,
+      max_tokens: 1600,
+      timeout: 180,
+    })
+      .then(function (res) {
+        var err = res && res.error
+        if (err) throw new Error(typeof err === 'string' ? err : JSON.stringify(err))
+        var text = res && (res.result && res.result.text || res.text) || ''
+        if (!text) {
+          setAiState('error')
+          host.logs('warn', 'gobravo-workflow', 'diagnosis', 'análisis IA devolvió vacío')
+          host.notifyError('❌ El diagnóstico llegó vacío (revisa el modelo configurado)')
+          return
+        }
+        setDxResult(text)
+        setAiState('done')
+        host.notify('✅ Diagnóstico generado (' + top.length + ' tickets)')
+      })
+      .catch(function (err) {
+        setAiState('error')
+        var msg = (err && (err.message || err)) || 'desconocido'
+        host.logs('warn', 'gobravo-workflow', 'diagnosis', 'error: ' + String(msg).slice(0, 300))
+        host.notifyError('❌ Análisis IA: ' + String(msg).slice(0, 200))
+      })
+  }
+
+  function closeDiagnosis() {
+    setDxResult(null)
+    setAiState('idle')
+  }
+
   function checkCommentsBatch(items) {
     if (!items || !items.length) return
     var chunk = items.slice(0, 50)
@@ -2361,7 +2437,36 @@ function TicketsTab({ hubToken }) {
       // Header
       jsx('div', {
         style: { padding: '8px 12px', borderBottom: '1px solid #333', fontSize: 11, color: '#888', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-        children: jsx('span', { style: { fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }, children: [jsx(Icon, { path: ICON_TICKET, className: 'size-3.5 shrink-0' }), ' Buscar tickets'] }),
+        children: [
+          jsx('span', { style: { fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }, children: [jsx(Icon, { path: ICON_TICKET, className: 'size-3.5 shrink-0' }), ' Buscar tickets'] }),
+          // Badge IA (botón de diagnóstico)
+          jsx('button', {
+            onClick: runDiagnosis,
+            disabled: aiState === 'analyzing',
+            title: 'Analizar los tickets visibles y publicar el diagnóstico en el chat',
+            style: {
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              background: 'transparent', border: '1px solid #333', color: '#8b949e',
+              borderRadius: 999, padding: '2px 8px', fontSize: 11, fontWeight: 500,
+              cursor: aiState === 'analyzing' ? 'default' : 'pointer',
+              opacity: aiState === 'analyzing' ? 0.6 : 1,
+              transition: 'all .15s',
+            },
+            onMouseEnter: function (e) {
+              if (aiState !== 'analyzing') { e.currentTarget.style.color = '#c9d1d9'; e.currentTarget.style.borderColor = '#8b949e' }
+            },
+            onMouseLeave: function (e) {
+              if (aiState !== 'analyzing') { e.currentTarget.style.color = '#8b949e'; e.currentTarget.style.borderColor = '#333' }
+            },
+            children: jsx('span', {
+              style: { display: 'inline-flex', alignItems: 'center', gap: 4 },
+              children: [
+                jsx(Icon, { path: ICON_SPARKLES, className: 'size-3 shrink-0' }),
+                aiState === 'analyzing' ? 'Analizando…' : (aiState === 'done' ? 'Listo' : (aiState === 'error' ? 'Error' : 'IA')),
+              ],
+            }),
+          }),
+        ],
       }),
 
       // Search bar
@@ -2376,6 +2481,8 @@ function TicketsTab({ hubToken }) {
             setQuery(e.target.value)
             setSelectedId(null)
             setDetail(null)
+            // si hay diagnóstico abierto, al filtrar lo cerramos
+            setDxResult(null); setAiState('idle')
           },
           style: {
             width: '100%', boxSizing: 'border-box', backgroundColor: '#111', color: '#ddd',
@@ -2383,6 +2490,39 @@ function TicketsTab({ hubToken }) {
           },
         }),
       }),
+
+      // Panel de diagnóstico IA (reemplaza los resultados mientras está activo)
+      (aiState === 'analyzing' || aiState === 'done' || aiState === 'error') &&
+        jsxs('div', {
+          style: { borderBottom: '1px solid #222', backgroundColor: '#141414' },
+          children: [
+            // Barra de título del panel
+            jsx('div', {
+              style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderBottom: '1px solid #222' },
+              children: [
+                jsx('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 600, fontSize: 12, color: '#ddd' }, children: [jsx(Icon, { path: ICON_SPARKLES, className: 'size-3.5 shrink-0' }), ' Diagnóstico IA'] }),
+                aiState === 'analyzing' && jsx('span', { style: { fontSize: 11, color: '#888' }, children: 'generando…' }),
+                aiState === 'error' && jsx('span', { style: { fontSize: 11, color: '#ef4444' }, children: 'error' }),
+                jsx('button', {
+                  onClick: closeDiagnosis,
+                  title: 'Cerrar diagnóstico',
+                  style: { marginLeft: 'auto', background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: 13, padding: 0 },
+                  children: jsx(Icon, { path: ICON_X_MARK, className: 'size-3.5 shrink-0' }),
+                }),
+              ],
+            }),
+            // Cuerpo del panel
+            aiState === 'analyzing' &&
+              jsx('div', { style: { padding: 18, textAlign: 'center', fontSize: 12, color: '#888' }, children: '⏳ Analizando tickets…' }),
+            aiState === 'error' &&
+              jsx('div', { style: { padding: 14, fontSize: 12, color: '#ef4444' }, children: '❌ No se pudo generar el diagnóstico. Intenta de nuevo.' }),
+            aiState === 'done' && dxResult &&
+              jsx('div', {
+                style: { padding: '10px 12px', fontSize: 12, color: '#ccc', lineHeight: 1.7, wordBreak: 'break-word', maxHeight: 320, overflowY: 'auto' },
+                dangerouslySetInnerHTML: { __html: mdToHtml(dxResult) },
+              }),
+          ],
+        }),
 
       // Loading
       loading &&
@@ -4487,6 +4627,17 @@ function ConfigTab({ hubToken, githubToken, webhookUrl, onSave }) {
   var ghRef = useRef(null)
   var whRef = useRef(null)
   var prMsgRef = useRef(null)
+  var aiProviderRef = useRef(null)
+  var aiModelRef = useRef(null)
+  var aiPromptRef = useRef(null)
+
+  // Estado del análisis IA (sección Task)
+  var _ai = useState(function () { return loadStr(STORAGE_AI_PROVIDER) || '' })
+  var aiProvider = _ai[0]
+  var setAiProvider = _ai[1]
+  var _am = useState(function () { return loadStr(STORAGE_AI_MODEL) || '' })
+  var aiModel = _am[0]
+  var setAiModel = _am[1]
 
   var _r = useState(function () { return loadTrackRules() })
   var initialRules = _r[0]
@@ -4570,6 +4721,38 @@ function ConfigTab({ hubToken, githubToken, webhookUrl, onSave }) {
     host.notify(val.trim() ? '✅ Mensaje de Google Chat guardado' : '✅ Mensaje restablecido al predeterminado')
   }
 
+  function handleSaveAI() {
+    var prov = aiProviderRef.current && aiProviderRef.current.value
+    var model = aiModelRef.current && aiModelRef.current.value
+    var prompt = aiPromptRef.current && aiPromptRef.current.value
+    if (!prov || !model) {
+      host.notifyError('❌ Selecciona proveedor y modelo del análisis')
+      return
+    }
+    saveStr(STORAGE_AI_PROVIDER, prov)
+    saveStr(STORAGE_AI_MODEL, model)
+    saveStr(STORAGE_AI_PROMPT, (prompt || '').trim() ? prompt.trim() : AI_PROMPT_DEFAULT)
+    // Escribe la task auxiliar analysis_tickets para que llm.oneshot use proveedor/modelo
+    // (config.set del gateway NO acepta auxiliary.*; se usa cli.exec como provider-switch)
+    var argv = [
+      ['config', 'set', 'auxiliary.analysis_tickets.provider', prov],
+      ['config', 'set', 'auxiliary.analysis_tickets.model', model],
+    ]
+    argv.reduce(function (p, a) {
+      return p.then(function () {
+        return host.request('cli.exec', { argv: a }).catch(function (err) {
+          host.logs('warn', 'gobravo-workflow', 'setAIaux', String(err).slice(0, 100))
+        })
+      })
+    }, Promise.resolve())
+    host.notify('✅ Análisis IA guardado (' + prov + ' / ' + model + ')')
+  }
+
+  function restoreAIPrompt() {
+    if (aiPromptRef.current) aiPromptRef.current.value = AI_PROMPT_DEFAULT
+    host.notify('↺ Prompt de análisis restablecido al predeterminado')
+  }
+
   function handleSavePRCreds() {
     var hub = loadStr(STORAGE_HUB_TOKEN) || ''
     var gh = (ghRef.current && ghRef.current.value) || loadStr(STORAGE_GITHUB_TOKEN) || ''
@@ -4619,6 +4802,29 @@ function ConfigTab({ hubToken, githubToken, webhookUrl, onSave }) {
       }
     }
     return (MODEL_OPTIONS[provider] || []).slice()
+  }
+
+  // Campo de modelo del análisis IA (dropdown dinámico según proveedor)
+  function aiModelField() {
+    var models = modelsForProvider(aiProvider)
+    if (models.length) {
+      return jsx('select', {
+        ref: aiModelRef,
+        defaultValue: aiModel,
+        style: Object.assign({}, inputStyle, { fontSize: 11, cursor: 'pointer' }),
+        children: [
+          jsx('option', { value: '', children: 'Selecciona modelo…' }),
+          models.map(function (m) { return jsx('option', { value: m, children: m }, m) }),
+        ],
+      }, aiProvider || 'none')
+    }
+    return jsx('input', {
+      ref: aiModelRef,
+      type: 'text',
+      defaultValue: aiModel,
+      placeholder: aiProvider === 'openrouter' ? 'ej: anthropic/claude-sonnet-4' : 'Escribe el modelo manualmente…',
+      style: Object.assign({}, inputStyle, { fontSize: 11 }),
+    }, aiProvider || 'none')
   }
 
   function modelField(t) {
@@ -4832,7 +5038,64 @@ function ConfigTab({ hubToken, githubToken, webhookUrl, onSave }) {
           onClose: function () {},
           embedded: true,
         }),
-        jsx('div', { style: { fontSize: 10, color: '#888', marginTop: 8, lineHeight: 1.5 }, children: 'Estos equipos se usan para filtrar la búsqueda en la pestaña de tickets.' }),
+        jsx('div', { style: { fontSize: 10, color: '#888', marginTop: 8, marginBottom: 14, lineHeight: 1.5 }, children: 'Estos equipos se usan para filtrar la búsqueda en la pestaña de tickets.' }),
+        // ── Análisis IA ─────────────────────────────────────────────
+        jsx('div', { style: { borderTop: '1px solid #2a2a2a', margin: '10px 0 12px' } }),
+        jsx('div', { style: { fontSize: 12, fontWeight: 600, color: '#ddd', marginBottom: 4, display: 'inline-flex', alignItems: 'center', gap: 6 }, children: [jsx(Icon, { path: ICON_SPARKLES, className: 'size-3.5 shrink-0' }), ' Análisis IA de tickets'] }),
+        jsx('div', { style: { fontSize: 10, color: '#888', marginBottom: 10, lineHeight: 1.4 }, children: 'Modelo que genera el diagnóstico al pulsar el badge ✳ IA en la pestaña de tickets, y prompt personalizable.' }),
+        // Proveedor
+        jsxs('div', { style: { marginBottom: 10 },
+          children: [
+            jsx('label', { style: { fontSize: 10, color: '#888', display: 'block', marginBottom: 3 }, children: 'Proveedor' }),
+            jsx('select', {
+              ref: aiProviderRef,
+              defaultValue: aiProvider,
+              style: Object.assign({}, inputStyle, { fontSize: 11, cursor: 'pointer' }),
+              onChange: function (e) { setAiProvider(e.target.value) },
+              children: [
+                jsx('option', { value: '', children: 'Selecciona proveedor…' }),
+                (catalog && Array.isArray(catalog.providers) && catalog.providers.length
+                  ? catalog.providers
+                  : [{ slug: 'tokengate' }, { slug: 'deepseek' }]
+                ).map(function (p) {
+                  return jsx('option', { value: p.slug, children: p.name || p.slug }, p.slug)
+                }),
+              ],
+            }),
+          ],
+        }),
+        // Modelo (dinámico según proveedor)
+        jsxs('div', { style: { marginBottom: 10 },
+          children: [
+            jsx('label', { style: { fontSize: 10, color: '#888', display: 'block', marginBottom: 3 }, children: 'Modelo' }),
+            // key=aiProvider fuerza el re-montaje del campo al cambiar proveedor
+            jsx('span', { key: aiProvider || 'none', className: 'ai-model-field', children: aiModelField() }),
+          ],
+        }),
+        // Prompt (editable)
+        jsxs('div', { style: { marginBottom: 10 },
+          children: [
+            jsx('label', { style: { fontSize: 10, color: '#888', display: 'block', marginBottom: 3 }, children: 'Prompt del análisis (editable)' }),
+            jsx('textarea', {
+              ref: aiPromptRef,
+              defaultValue: loadStr(STORAGE_AI_PROMPT) || AI_PROMPT_DEFAULT,
+              style: { width: '100%', boxSizing: 'border-box', backgroundColor: '#111', color: '#ddd', border: '1px solid #333', borderRadius: 4, padding: '6px 10px', fontSize: 11, minHeight: 160, outline: 'none', resize: 'vertical', fontFamily: 'inherit' },
+            }),
+            jsx('div', { style: { fontSize: 10, color: '#58a6ff', marginTop: 4 }, children: 'Variable {N} = cantidad de tickets. Se sustituye automáticamente al ejecutar.' }),
+          ],
+        }),
+        jsxs('div', { style: { display: 'flex', gap: 6, justifyContent: 'flex-end' }, children: [
+          jsx('button', {
+            onClick: restoreAIPrompt,
+            style: { background: 'none', border: '1px solid #333', color: '#8b949e', borderRadius: 3, padding: '1px 8px', cursor: 'pointer', fontSize: 9, lineHeight: '14px', fontWeight: 600 },
+            children: '↺ Restaurar prompt',
+          }),
+          jsx('button', {
+            onClick: handleSaveAI,
+            style: { backgroundColor: '#238636', color: 'white', border: 'none', borderRadius: 3, padding: '1px 8px', cursor: 'pointer', fontSize: 9, fontWeight: 600, lineHeight: '14px' },
+            children: 'Guardar análisis IA',
+          }),
+        ]}),
       ]}),
     ],
   })
