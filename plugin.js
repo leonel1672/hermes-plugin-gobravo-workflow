@@ -27,6 +27,34 @@ const HUB_BASE = 'https://hub.gobravo.io/api/v1'
 
 // ── StatusTab constants ────────────────────────────────────────────
 const CACHE_TTL = 120_000
+
+// Reglas por defecto (se fusionan con lo guardado en localStorage)
+var DEFAULT_TRACK_RULES = {
+  backlog_to_shaping: {
+    provider: 'Token Gate',
+    model: 'assistant',
+    rules: 'Eres un PM técnico. Haz un análisis a alto nivel del track para decidir si pasa a shaping.\n\n1. Obtén los detalles del track (content, comments, activities, dependencies).\n2. Analiza el código del repo SOLO si la descripción no es clara.\n3. Evalúa: ¿el problema está claro? ¿el alcance es viable? ¿hay objetivo medible? ¿hay dependencias críticas? ¿hay ambigüedad significativa?\n4. Pregunta el proyecto donde se trabajará.\n5. Realiza todas las preguntas necesarias para mejorar el análisis.\n6. Publica el análisis como comentario en el Hub con el título "Análisis inicial".\n7. Recomienda al usuario: pasar a shaping, quedarse en backlog (con nota de qué falta), o cancelar (con motivo).\n8. El usuario decide. Si confirma shaping: pasa el track a shaping y asigna el encargado (owner).\n9. Solo cambias el estado una vez, después de la confirmación del usuario.',
+    refs: ['https://github.com/resuelve/core/wiki'],
+  },
+  shaping_to_todo: {
+    provider: 'Token Gate',
+    model: 'coder',
+    rules: 'Eres un developer Sr / Arquitecto especializado en Elixir. Haz un análisis técnico profundo del track basándote en el análisis inicial (comentario "Análisis inicial").\n\n1. Obtén los detalles del track (content, comments, activities, dependencies).\n2. Analiza el código del repo SIEMPRE — revisa los archivos implicados, schemas, flujos.\n3. Propón la solución arquitectónica. Si es compleja (multi-módulo, arquitectura), diagrama la solución.\n4. Desglosa el track en tasks hijas concretas que no excedan 1 día de trabajo cada una.\n5. Para cada task define: nombre descriptivo, descripción técnica, archivos/código a tocar, dependencias, riesgos y estrategia de mitigación.\n6. Identifica el orden óptimo de ejecución.\n7. Estima la fecha de entrega del track y de cada task.\n8. Haz las preguntas necesarias al usuario.\n9. Presenta el plan al usuario para revisión: tasks, fechas y orden de ejecución.\n10. El usuario confirma. Solo entonces: crea las tasks hijas en el Hub (status: todo, owner: tú), actualiza el track a todo, asigna due_date al track y a cada task.\n11. Agrega un comentario resumen con: análisis, tasks creadas (con IDs) y orden de ejecución.',
+    refs: ['https://github.com/resuelve/core/wiki'],
+  },
+  todo_to_in_progress: {
+    provider: 'Token Gate',
+    model: 'coder',
+    rules: 'Eres un developer Sr especializado en Elixir y orquestador de subagentes. Ejecuta las tasks hijas del track en el orden definido.\n\n1. Lee los detalles del track y sus tasks hijas.\n2. Si hay múltiples tasks independientes, usa subagentes en paralelo para ejecutarlas. Tú eres el orquestador: planificas, delegas y auditas.\n3. Cada subagente trabaja en una task aislada (archivos disjuntos, sin pisarse).\n4. Tú (orquestador) auditas TODO el trabajo de los subagentes antes de considerarlo listo: valida syntax, compile, format y coherencia.\n5. Antes de considerar una task como lista: valida compile + tests + format (mix compile, mix test, mix format --check-formatted).\n6. No uses IO.inspect en producción. Si debuggeas, revierte todo antes de terminar.\n7. NO hagas commit sin aprobación explícita del usuario. Muestra el diff/resumen y espera confirmación.\n8. Al completar cada task: márcala como done en el Hub y agrega un comentario con qué se hizo (archivos modificados, cambios clave).\n9. Reporta el progreso en el track (Hub): qué task se completó y qué sigue.\n10. Si encuentras un bloqueo (dependencia faltante, bug no relacionado, ambigüedad), detente y pregunta al usuario antes de continuar.\n11. Respeta las convenciones del proyecto (estilo Elixir, estructura umbrella, commits en español).\n12. Toma en cuenta las URLs de referencia del proyecto.',
+    refs: ['https://github.com/resuelve/core/wiki'],
+  },
+  in_progress_to_review: {
+    provider: 'Token Gate',
+    model: 'auxiliar',
+    rules: 'Eres un developer Sr especializado en Elixir. Esta es la fase de cierre del track.\n\n1. Verifica que todas las tasks hijas estén en done y con comentario de lo realizado.\n2. Haz una self-review completa del código: security, performance, edge cases, estilo, convenciones del proyecto.\n3. Verifica que compile + tests + format pasen.\n4. Prepara el PR en GitHub con: título descriptivo, descripción con el resumen del track y las tasks completadas.\n5. Prepara el mensaje del webhook (Google Chat) con el link del PR para avisar al equipo.\n6. Muestra todo al usuario (PR + webhook) y espera confirmación antes de publicar.\n7. Tras confirmación: crea el PR, envía el webhook.\n8. Pasa el track a in_review en el Hub.\n9. Agrega un comentario resumen en el track: qué se hizo, qué cambió, PR creado (con URL), tasks completadas.\n10. Toma en cuenta las URLs de referencia del proyecto.',
+    refs: ['https://github.com/resuelve/core/wiki'],
+  },
+}
 const DEFAULT_STATUS_MODELS = {
   shaping: 'coder',
   todo: 'coder',
@@ -1441,6 +1469,10 @@ function PRsTab({ githubToken, webhookUrl }) {
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
+          position: 'sticky',
+          top: 0,
+          zIndex: 10,
+          backgroundColor: '#161616',
         },
         children: [
           jsx('span', { style: { fontWeight: 600 }, children: 'GitHub PRs' }),
@@ -1701,7 +1733,7 @@ function StatsTab({ hubToken, role, avatar }) {
     children: [
       // Header
       jsxs('div', {
-        style: { padding: '0 0 8px 0', borderBottom: '1px solid #21262d', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 },
+        style: { padding: '0 0 8px 0', borderBottom: '1px solid #21262d', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8, position: 'sticky', top: 0, zIndex: 10, backgroundColor: '#161616' },
         children: [
           // Avatar (foto real o iniciales)
           avatar
@@ -2392,6 +2424,12 @@ function TicketsTab({ hubToken }) {
           }
         } catch {}
       }
+      // Ordenar por fecha de creación ascendente (más vieja primero)
+      allFound.sort(function (a, b) {
+        var da = a.created_at ? new Date(a.created_at).getTime() : 0
+        var db = b.created_at ? new Date(b.created_at).getTime() : 0
+        return da - db
+      })
       setAllTasks(allFound)
       setLoading(false)
       checkCommentsBatch(allFound)
@@ -2434,11 +2472,11 @@ function TicketsTab({ hubToken }) {
   // ── View: Search ──
   return jsxs('div', {
     children: [
-      // Header
+      // Header (sticky)
       jsx('div', {
-        style: { padding: '8px 12px', borderBottom: '1px solid #333', fontSize: 11, color: '#888', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+        style: { padding: '8px 12px', borderBottom: '1px solid #333', fontSize: 11, color: '#888', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 10, backgroundColor: '#161616' },
         children: [
-          jsx('span', { style: { fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }, children: [jsx(Icon, { path: ICON_TICKET, className: 'size-3.5 shrink-0' }), ' Buscar tickets'] }),
+          jsx('span', { style: { fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }, children: [jsx(Icon, { path: ICON_TICKET, className: 'size-3.5 shrink-0' }), ' Tasks asignadas'] }),
           // Badge IA (botón de diagnóstico)
           jsx('button', {
             onClick: runDiagnosis,
@@ -2576,7 +2614,7 @@ function TicketsTab({ hubToken }) {
                               jsxs('div', { style: { fontSize: 11, color: '#888', marginTop: 2, display: 'flex', gap: 6, alignItems: 'center' },
                                 children: [
                                   jsx('span', { style: { color: '#58a6ff' }, children: item.code || '' }),
-                                  item.updated_at && jsx('span', { children: '· ' + timeAgo(item.updated_at) }),
+                                  item.created_at && jsx('span', { style: { color: '#6e7681', fontSize: 10 }, children: '· ⤴ ' + timeAgo(item.created_at) }),
                                   hasComments[item.id] && jsx('span', {
                                     onClick: function (e) { e.stopPropagation(); setCommentsTicket(item) },
                                     title: 'Ver comentarios',
@@ -3274,7 +3312,7 @@ function TeamTab({ hubToken, teams, dashboards, loading, error }) {
     children: [
       // ── Header ─────────────────────────────────────────────
       jsxs('div', {
-        style: { padding: '0 0 8px 0', borderBottom: '1px solid #21262d', marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+        style: { padding: '0 0 8px 0', borderBottom: '1px solid #21262d', marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, position: 'sticky', top: 0, zIndex: 10, backgroundColor: '#161616' },
         children: [
           jsxs('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 4 }, children: [
             jsx(TT_Icon, { path: TT_ICON_USERS, className: 'size-4 shrink-0' }),
@@ -4064,8 +4102,19 @@ function StatusTab({ hubToken }) {
 
     setActioningId(item.id + '-' + item.status)
     try {
-      // Reglas de análisis por transición de estado
-      var rules = loadTrackRules()
+      // Reglas de análisis por transición de estado (fusiona defaults con guardadas)
+      var saved = loadTrackRules()
+      var rules = {}
+      Object.keys(DEFAULT_TRACK_RULES).forEach(function (k) {
+        var d = DEFAULT_TRACK_RULES[k] || {}
+        var s = saved[k] || {}
+        rules[k] = {
+          provider: s.provider || d.provider || '',
+          model: s.model || d.model || '',
+          rules: s.rules || d.rules || '',
+          refs: (s.refs && s.refs.length) ? s.refs : (d.refs || []),
+        }
+      })
       var transMap = {
         backlog: 'backlog_to_shaping',
         shaping: 'shaping_to_todo',
@@ -4540,9 +4589,13 @@ function StatusTab({ hubToken }) {
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
+            position: 'sticky',
+            top: 0,
+            zIndex: 10,
+            backgroundColor: '#161616',
           },
           children: [
-            jsx('span', { style: { fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }, children: [jsx(Icon, { path: ICON_CHECK_BADGE, className: 'size-3.5 shrink-0' }), ' Hub — ' + (data ? data.name : '')] }),
+            jsx('span', { style: { fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }, children: [jsx(Icon, { path: ICON_CHECK_BADGE, className: 'size-3.5 shrink-0' }), ' Tracks'] }),
             jsxs('span', {
               style: { display: 'flex', gap: 8 },
               children: [
@@ -4639,7 +4692,22 @@ function ConfigTab({ hubToken, githubToken, webhookUrl, onSave }) {
   var aiModel = _am[0]
   var setAiModel = _am[1]
 
-  var _r = useState(function () { return loadTrackRules() })
+  function mergeDefaults(saved) {
+    var merged = {}
+    TRANSITIONS.forEach(function (t) {
+      var d = DEFAULT_TRACK_RULES[t.key] || {}
+      var s = saved[t.key] || {}
+      merged[t.key] = {
+        provider: s.provider || d.provider || '',
+        model: s.model || d.model || '',
+        rules: s.rules || d.rules || '',
+        refs: (s.refs && s.refs.length) ? s.refs : (d.refs || []),
+      }
+    })
+    return merged
+  }
+
+  var _r = useState(function () { return mergeDefaults(loadTrackRules()) })
   var initialRules = _r[0]
 
   var _p = useState(function () {
@@ -5112,6 +5180,8 @@ var inputStyle = {
   fontSize: 12,
   outline: 'none',
 }
+
+// (DEFAULT_TRACK_RULES se define en constants.js — disponible globalmente)
 
 // Transiciones de estado configurables (cards colapsables)
 var TRANSITIONS = [
