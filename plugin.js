@@ -21,6 +21,11 @@ const STORAGE_TRACK_RULES = `hermes-plugin-${ID}-track-rules`
 const STORAGE_AI_PROVIDER = `hermes-plugin-${ID}-ai-provider`
 const STORAGE_AI_MODEL = `hermes-plugin-${ID}-ai-model`
 const STORAGE_AI_PROMPT = `hermes-plugin-${ID}-ai-prompt`
+const STORAGE_PR_REVIEW_PROMPT = `hermes-plugin-${ID}-pr-review-prompt`
+const STORAGE_PR_REVIEW_REFS = `hermes-plugin-${ID}-pr-review-refs`
+const STORAGE_PR_REVIEW_MODEL = `hermes-plugin-${ID}-pr-review-model`
+const STORAGE_PR_REVIEW_PROVIDER = `hermes-plugin-${ID}-pr-review-provider`
+const PR_REVIEW_DEFAULT = 'Revisa este PR: {URL}\n\n1. Obtén el diff completo del PR (gh pr diff o git diff).\n2. Analiza línea por línea buscando: bugs, edge cases, seguridad, performance, convenciones de Elixir.\n3. NO publiques un resumen global. Los comentarios van INLINE, en la línea exacta donde viste el problema.\n4. Muestra TODOS los hallazgos al usuario primero (formato: archivo:línea — problema — sugerencia).\n5. El usuario confirma uno por uno. Solo cuando confirme, publica ese comentario inline en GitHub (gh api o REST).\n6. Formato del comentario: ### [emoji] file:line — título (en español, sin firma "Hermes Agent").\n7. Si NO encontraste problemas, informa que todo está bien.\n8. Si todo está bien O después de publicar los comentarios confirmados, pide autorización al usuario para hacer APPROVE del PR.\n9. NO apruebes sin confirmación explícita del usuario.\n10. Toma en cuenta las URLs de referencia del proyecto.'
 const PR_MESSAGE_DEFAULT = '👋 Team, cuando puedan échenme la mano con el code review de este PR:\n\n📌 {title}\n🔗 {url}\n#{number} · {repo}'
 const AI_PROMPT_DEFAULT = 'Analiza los {N} tickets del tracker (tasks y tracks) que se te dan y produce un DIAGNÓSTICO OPERATIVO de este squad. NO hagas un resumen genérico: identifica causas raíz y da acciones concretas.\n\nUsa exactamente este formato:\n\n## 1. Dolencias por dominio\nAgrupa los tickets por causa raíz / dominio real (pagos, asignación de clientes, mensajería, auth, UI, deuda técnica, datos, etc.). Para cada grupo:\n- **Nombre del dominio** — X de {N} tickets (YY%)\n- El patrón que los une (qué falla y por qué)\n- 2-3 códigos de ticket como evidencia\n\n## 2. Cuellos de botella\n- Tickets atascados en shaping/todo SIN due_date (indica cuánto llevan sin moverse)\n- Items de prioridad high que llevan mucho tiempo en backlog\n- Concentración de trabajo en un solo owner\n\n## 3. Riesgos de revenue / operación\n- Bugs en flujos críticos (cobro, pago, suspensión, asignación, mensajería)\n- Tickets de clientes que se repiten o se escalan\n- Items con due_date vencido o muy próximo\n\n## 4. Plan de acción (máximo 3 acciones)\nPara cada una: qué hacer, a quién asignar (según ownership detectado), y por qué va primero.\n\nReglas:\n- Cita códigos de ticket reales (TRACKER-...)\n- Distingue tracks (proyectos/épicas) de tasks (bugs/tickets puntuales)\n- Sé concreto y breve; no rellenes secciones vacías con "nada que reportar".'
 const HUB_BASE = 'https://hub.gobravo.io/api/v1'
@@ -1112,9 +1117,20 @@ function PRsTab({ githubToken, webhookUrl }) {
 
     setReviewingId(pr.id)
     try {
+      // Prompt configurable desde Config (sub-tab PRs) + URLs de referencia
+      var rawPrompt = loadStr(STORAGE_PR_REVIEW_PROMPT) || PR_REVIEW_DEFAULT
+      var refs = loadStr(STORAGE_PR_REVIEW_REFS)
+      var refList = []
+      try { refList = refs ? JSON.parse(refs) : [] } catch (e) { refList = [] }
+
+      var text = rawPrompt.split('{URL}').join(pr.html_url)
+      if (refList.length) {
+        text += '\n\nURLs de referencia del proyecto:\n' + refList.map(function (u) { return '- ' + u }).join('\n')
+      }
+
       host.request('prompt.submit', {
         session_id: sid,
-        text: 'Revisa este PR de código: ' + pr.html_url + '\n\nAnaliza los cambios, identifica problemas de código, y publica comentarios inline en el PR.',
+        text: text,
       })
       host.notify('🔍 Revisión enviada — el asistente procesará el PR')
     } catch (err) {
@@ -4683,6 +4699,9 @@ function ConfigTab({ hubToken, githubToken, webhookUrl, onSave }) {
   var aiProviderRef = useRef(null)
   var aiModelRef = useRef(null)
   var aiPromptRef = useRef(null)
+  var prReviewPromptRef = useRef(null)
+  var prReviewProviderRef = useRef(null)
+  var prReviewModelRef = useRef(null)
 
   // Estado del análisis IA (sección Task)
   var _ai = useState(function () { return loadStr(STORAGE_AI_PROVIDER) || '' })
@@ -4819,6 +4838,62 @@ function ConfigTab({ hubToken, githubToken, webhookUrl, onSave }) {
   function restoreAIPrompt() {
     if (aiPromptRef.current) aiPromptRef.current.value = AI_PROMPT_DEFAULT
     host.notify('↺ Prompt de análisis restablecido al predeterminado')
+  }
+
+  // ── PR Review config ─────────────────────────────────────────────
+  var _prrefs = useState(function () {
+    var raw = loadStr(STORAGE_PR_REVIEW_REFS)
+    try { var arr = raw ? JSON.parse(raw) : []; return Array.isArray(arr) ? arr : [] } catch (e) { return [] }
+  })
+  var prReviewRefs = _prrefs[0]
+  var setPrReviewRefs = _prrefs[1]
+
+  function handleSavePRReview() {
+    var prov = (prReviewProviderRef.current && prReviewProviderRef.current.value) || ''
+    var model = (prReviewModelRef.current && prReviewModelRef.current.value) || ''
+    var prompt = (prReviewPromptRef.current && prReviewPromptRef.current.value) || ''
+    if (!prov || !model) {
+      host.notifyError('❌ Selecciona proveedor y modelo de la revisión')
+      return
+    }
+    saveStr(STORAGE_PR_REVIEW_PROVIDER, prov)
+    saveStr(STORAGE_PR_REVIEW_MODEL, model)
+    saveStr(STORAGE_PR_REVIEW_PROMPT, prompt.trim() ? prompt.trim() : PR_REVIEW_DEFAULT)
+    saveStr(STORAGE_PR_REVIEW_REFS, JSON.stringify(prReviewRefs.map(function (r) { return (r || '').trim() }).filter(Boolean)))
+    // Escribe la task auxiliar review_pr para que el chat use proveedor/modelo
+    var argv = [
+      ['config', 'set', 'auxiliary.review_pr.provider', prov],
+      ['config', 'set', 'auxiliary.review_pr.model', model],
+    ]
+    argv.reduce(function (p, a) {
+      return p.then(function () {
+        return host.request('cli.exec', { argv: a }).catch(function (err) {
+          host.logs('warn', 'gobravo-workflow', 'setPRaux', String(err).slice(0, 100))
+        })
+      })
+    }, Promise.resolve())
+    host.notify('✅ Reglas de revisión de PR guardadas (' + prov + ' / ' + model + ')')
+  }
+
+  function restorePRReviewPrompt() {
+    if (prReviewPromptRef.current) prReviewPromptRef.current.value = PR_REVIEW_DEFAULT
+    host.notify('↺ Prompt de revisión restablecido al predeterminado')
+  }
+
+  function prAddRef() {
+    setPrReviewRefs(prReviewRefs.concat(['']))
+  }
+
+  function prSetRef(i, val) {
+    var next = prReviewRefs.slice()
+    next[i] = val
+    setPrReviewRefs(next)
+  }
+
+  function prRemoveRef(i) {
+    var next = prReviewRefs.slice()
+    next.splice(i, 1)
+    setPrReviewRefs(next)
   }
 
   function handleSavePRCreds() {
@@ -5061,6 +5136,79 @@ function ConfigTab({ hubToken, githubToken, webhookUrl, onSave }) {
           onClick: handleSavePRMessage,
           style: { backgroundColor: '#238636', color: 'white', border: 'none', borderRadius: 3, padding: '1px 8px', cursor: 'pointer', fontSize: 9, fontWeight: 600, lineHeight: '14px' },
           children: 'Guardar mensaje',
+        })}),
+        jsx('div', { style: { borderTop: '1px solid #2a2a2a', margin: '14px 0 12px' } }),
+        // ── Revisión de PRs (prompt + referencias) ──
+        jsx('div', { style: { fontSize: 11, fontWeight: 600, color: '#ddd', marginBottom: 8 }, children: 'Revisión de PRs' }),
+        jsxs('div', { style: { marginBottom: 10 }, children: [
+          jsx('label', { style: { fontSize: 10, color: '#888', display: 'block', marginBottom: 3 }, children: 'Proveedor y modelo de la revisión' }),
+          jsxs('div', { style: { display: 'flex', gap: 6 }, children: [
+            jsx('select', {
+              ref: prReviewProviderRef,
+              defaultValue: loadStr(STORAGE_PR_REVIEW_PROVIDER) || 'tokengate',
+              style: Object.assign({}, inputStyle, { fontSize: 11, cursor: 'pointer' }),
+              children: [
+                jsx('option', { value: 'tokengate', children: 'Token Gate' }),
+                jsx('option', { value: 'deepseek', children: 'DeepSeek' }),
+              ],
+            }),
+            jsx('select', {
+              ref: prReviewModelRef,
+              defaultValue: loadStr(STORAGE_PR_REVIEW_MODEL) || 'coder-sr',
+              style: Object.assign({}, inputStyle, { fontSize: 11, cursor: 'pointer' }),
+              children: [
+                jsx('option', { value: 'coder', children: 'coder' }),
+                jsx('option', { value: 'coder-sr', children: 'coder-sr' }),
+                jsx('option', { value: 'coder-jr', children: 'coder-jr' }),
+                jsx('option', { value: 'auxiliar', children: 'auxiliar' }),
+                jsx('option', { value: 'assistant', children: 'assistant' }),
+              ],
+            }),
+          ]}),
+        ]}),
+        jsxs('div', { style: { marginBottom: 10 }, children: [
+          jsx('label', { style: { fontSize: 10, color: '#888', display: 'flex', alignItems: 'center', gap: 4, marginBottom: 3 }, children: [jsx(Icon, { path: ICON_CHAT_BUBBLE_LEFT, className: 'size-3 shrink-0' }), ' Prompt de revisión' ] }),
+          jsx('textarea', {
+            ref: prReviewPromptRef,
+            defaultValue: loadStr(STORAGE_PR_REVIEW_PROMPT) || PR_REVIEW_DEFAULT,
+            placeholder: PR_REVIEW_DEFAULT,
+            style: { width: '100%', boxSizing: 'border-box', backgroundColor: '#111', color: '#ddd', border: '1px solid #333', borderRadius: 4, padding: '6px 10px', fontSize: 11, minHeight: 120, outline: 'none', resize: 'vertical', fontFamily: 'inherit', marginBottom: 3 },
+          }),
+          jsx('div', { style: { fontSize: 10, color: '#888', marginBottom: 4, lineHeight: 1.5 }, children: 'Variable: {URL} — se reemplaza con la URL del PR. Los comentarios van inline, uno por uno con confirmación del usuario.' }),
+          jsx('button', {
+            onClick: restorePRReviewPrompt,
+            style: { background: 'none', border: 'none', color: '#58a6ff', fontSize: 10, cursor: 'pointer', padding: 0, textDecoration: 'underline' },
+            children: '↺ Restablecer prompt predeterminado',
+          }),
+        ]}),
+        jsxs('div', { style: { marginBottom: 10 }, children: [
+          jsx('label', { style: { fontSize: 10, color: '#888', display: 'block', marginBottom: 3 }, children: 'URLs de referencia' }),
+          (prReviewRefs.length ? prReviewRefs : ['']).map(function (r, i) {
+            return jsxs('div', { style: { display: 'flex', gap: 6, marginBottom: 4, alignItems: 'center' }, children: [
+              jsx('input', {
+                type: 'text',
+                value: r,
+                onChange: function (e) { prSetRef(i, e.target.value) },
+                placeholder: 'https://...',
+                style: Object.assign({}, inputStyle, { fontSize: 10, padding: '3px 8px' }),
+              }),
+              jsx('button', {
+                onClick: function () { prRemoveRef(i) },
+                style: { background: 'none', border: 'none', color: '#f85149', cursor: 'pointer', fontSize: 12, padding: '0 4px' },
+                children: '✕',
+              }),
+            ]}, 'prref-' + i)
+          }),
+          jsx('button', {
+            onClick: prAddRef,
+            style: { background: 'none', border: '1px dashed #444', color: '#8b949e', borderRadius: 4, padding: '2px 8px', fontSize: 10, cursor: 'pointer' },
+            children: '+ Agregar URL',
+          }),
+        ]}),
+        jsx('div', { style: { display: 'flex', justifyContent: 'flex-end' }, children: jsx('button', {
+          onClick: handleSavePRReview,
+          style: { backgroundColor: '#238636', color: 'white', border: 'none', borderRadius: 3, padding: '1px 8px', cursor: 'pointer', fontSize: 9, fontWeight: 600, lineHeight: '14px' },
+          children: 'Guardar reglas de PR',
         })}),
         jsx('div', { style: { borderTop: '1px solid #2a2a2a', margin: '14px 0 12px' } }),
         jsx('div', { style: { fontSize: 11, fontWeight: 600, color: '#ddd', marginBottom: 8 }, children: 'Credenciales' }),
