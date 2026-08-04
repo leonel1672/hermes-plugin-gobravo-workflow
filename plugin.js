@@ -409,11 +409,11 @@ function statusBadge(status) {
 }
 
 var STATUS_COLORS = {
-  backlog: '#6e7681',
-  shaping: '#d29922',
-  todo: '#58a6ff',
-  in_progress: '#3fb950',
-  in_review: '#a371f7',
+  backlog: '#8b949e',
+  shaping: '#a371f7',
+  todo: '#3fb950',
+  in_progress: '#f59e0b',
+  in_review: '#58a6ff',
   staging: '#f0883e',
   production: '#1f6feb',
   done: '#2ea043',
@@ -4285,28 +4285,29 @@ function StatusTab({ hubToken }) {
     if (item.type !== 'track') return null
 
     var isActioning = actioningId === (item.id + '-' + item.status)
-    var label, promptBuilder, color
+    var label, promptBuilder, color, icon
+    color = STATUS_COLORS[item.status] || '#8b949e'
 
     switch (item.status) {
       case 'backlog':
         label = 'Validar'
         promptBuilder = buildBacklogPrompt
-        color = '#8b949e'
+        icon = ICON_DOCUMENT_TEXT
         break
       case 'shaping':
         label = 'Definir'
         promptBuilder = buildShapingPrompt
-        color = '#58a6ff'
+        icon = ICON_PENCIL_SQUARE
         break
       case 'todo':
         label = 'Ejecutar'
         promptBuilder = buildTodoPrompt
-        color = '#3fb950'
+        icon = ICON_ARROW_RIGHT
         break
       case 'in_progress':
         label = 'Entregar'
         promptBuilder = buildTodoPrompt
-        color = '#f59e0b'
+        icon = ICON_ARROW_UP_RIGHT
         break
       default:
         return null
@@ -4319,22 +4320,22 @@ function StatusTab({ hubToken }) {
       },
       disabled: isActioning,
       style: {
-        writingMode: 'vertical-rl',
-        textOrientation: 'mixed',
-        fontSize: 8,
-        fontWeight: 700,
-        padding: '8px 3px',
-        letterSpacing: '1.5px',
-        textTransform: 'uppercase',
-        border: 'none',
-        borderRadius: '0 3px 3px 0',
-        background: color + '22',
+        width: 26,
+        height: 26,
+        borderRadius: 5,
+        border: '1px solid',
+        borderColor: isActioning ? '#444' : color,
         color: isActioning ? '#555' : color,
+        background: 'transparent',
         cursor: isActioning ? 'default' : 'pointer',
         flexShrink: 0,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: 13,
       },
       title: isActioning ? 'Enviando...' : label + ': ' + item.code,
-      children: label,
+      children: isActioning ? '⏳' : jsx(Icon, { path: icon, className: 'size-3.5 shrink-0' }),
     }, 'action')
   }
 
@@ -4344,7 +4345,7 @@ function StatusTab({ hubToken }) {
     var statusColor = STATUS_COLORS[item.status] || '#8b949e'
 
     return jsxs('div', {
-      style: { display: 'flex', alignItems: 'stretch', borderBottom: '1px solid #1a1a1a', backgroundColor: isSelected ? '#1a1a2a' : 'transparent' },
+      style: { display: 'flex', alignItems: 'center', borderBottom: '1px solid #1a1a1a', backgroundColor: isSelected ? '#1a1a2a' : 'transparent' },
       onMouseEnter: function (e) { e.currentTarget.style.backgroundColor = '#2a2a2a' },
       onMouseLeave: function (e) { e.currentTarget.style.backgroundColor = isSelected ? '#1a1a2a' : 'transparent' },
       children: [
