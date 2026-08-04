@@ -11,9 +11,39 @@ Un pill en la barra de estado (con el logo de Bravo) abre un panel con pestañas
 | **Overview** | Tu perfil (avatar real, nombre, área, **puesto**), conteo de tracks/tasks/projects, métricas de aprobación. Solo tus datos (`my_*`) |
 | **Equipo** *(solo líderes)* | Dashboard del squad donde eres líder: completados, on-time, velocity, WIP, overdue, lead/cycle time, on-time por tipo y lista de miembros con avatares. Con sub-tabs si lideras varios equipos |
 | **PRs** | PRs de la org que esperan tu review (`review-requested:@me`) y PRs propios, con botones compactos de aprobar/review y detalle inline |
-| **Tasks** | Tasks activas de los squads seleccionados, con buscador, detalle inline y configuración del modelo de IA por estado |
-| **Tracks** | Tus tracks agrupados por estado (backlog → shaping → todo → in_progress → in_review), secciones colapsables y transiciones directas |
-| **Config** | Tokens (Hub, GitHub) y webhook de ayuda; selección de provider/modelo para transiciones |
+| **Tasks** | Tasks activas de los squads seleccionados, con buscador, detalle inline y diagnóstico IA (`✳`) |
+| **Tracks** | Tus tracks agrupados por estado (backlog → shaping → todo → in_progress → in_review), secciones colapsables y transiciones directas con botones de acción |
+| **Config** | Tokens (Hub, GitHub), webhook, prompts de transiciones, reglas de revisión de PRs |
+
+## 🎬 Transiciones de track (botones de acción)
+
+Cada track tiene un **botón de acción** a la izquierda con un ícono Heroicons monocromático, del mismo color que el status pill:
+
+| Estado | Acción | Ícono | Qué dispara |
+|---|---|---|---|
+| backlog | **Validar** | 📄 | Análisis de alto nivel para pasar a shaping |
+| shaping | **Definir** | ✏️ | Análisis técnico profundo + creación de tasks |
+| todo | **Ejecutar** | ➡️ | Puesta en marcha de la definición |
+| in_progress | **Entregar** | ↗️ | Cierre y paso a revisión |
+
+Las reglas, modelos y URLs de referencia de cada transición se configuran en **Config → Tracks**.
+
+## 🔍 Revisión de PRs (desde el chat)
+
+El botón **Review** del tab PRs envía un prompt al chat activo de Hermes con reglas configurables:
+
+- Comentarios **inline** (archivo:línea), no resumen global
+- El modelo muestra los hallazgos, **el usuario confirma uno por uno** antes de publicar
+- Approve solo con autorización explícita
+- URLs de referencia editables en **Config → PRs**
+
+## 📐 Panel resize
+
+El panel tiene **560px de ancho mínimo** y se puede agrandar arrastrando la esquina inferior derecha con el mouse.
+
+## 🔗 URLs auto-link
+
+Las URLs en las descripciones de tracks/tasks se convierten automáticamente en links clickeables con saltos de línea para destacarlas.
 
 ## 👥 Tab Equipo (condicional por rol)
 
@@ -34,7 +64,7 @@ lib/
 ├── constants.js       # imports + constantes globales
 ├── icons.js           # iconos SVG (Heroicons solid)
 ├── helpers.js         # mcpCall, loadStr/saveStr, etc.
-├── format-helpers.js  # fmt, pct, timeAgo...
+├── format-helpers.js  # fmt, pct, timeAgo, mdToHtml, STATUS_COLORS
 ├── md-prompt.js       # templates de prompts
 ├── prs-tab.js         # pestaña PRs
 ├── stats-tab.js       # pestaña Overview (avatar + puesto)
@@ -73,3 +103,20 @@ cp -r . ~/.hermes/desktop-plugins/gobravo-workflow/
 ```
 
 Luego en la app de escritorio: **⌘K → Reload desktop plugins**.
+
+## ⚙️ Configuración de reglas
+
+### Transiciones de tracks (Config → Tracks)
+
+4 cards colapsables con: provider, modelo, reglas (prompt) y URLs de referencia. Incluyen defaults listos para usar:
+
+| Transición | Default | Rol |
+|---|---|---|
+| backlog → shaping | `assistant` | PM técnico: analiza si el track está listo |
+| shaping → todo | `coder` | Arquitecto Elixir: solución técnica + tasks |
+| todo → in_progress | `coder` | Orquestador + subagentes: ejecución |
+| in_progress → review | `auxiliar` | Cierre: PR draft, webhook |
+
+### Revisión de PRs (Config → PRs)
+
+Provider, modelo, prompt editable (con `{URL}`) y URLs de referencia. Default: `coder-sr`, comentarios inline, approve autorizado.
