@@ -904,6 +904,11 @@ function PRsTab({ githubToken, webhookUrl }) {
   var reviewingId = _k[0]
   var setReviewingId = _k[1]
 
+  // Feedback visible de la lupa 🔍 (envío/éxito/error) — el toast se pierde fácil
+  var _kf = useState(null)
+  var reviewFeedback = _kf[0] // { prId, state: 'sending'|'sent'|'error', msg }
+  var setReviewFeedback = _kf[1]
+
   var _l = useState(null)
   var writing = _l[0]
   var setWriting = _l[1]
@@ -1117,15 +1122,17 @@ function PRsTab({ githubToken, webhookUrl }) {
     }
   }
 
-  function reviewPR(pr) {
+  async function reviewPR(pr) {
     haptic('tap')
     var sid = host.state.activeSessionId.get()
     if (!sid) {
       host.notifyError('❌ No hay sesión activa. Abre o crea un chat primero.')
+      setReviewFeedback({ prId: pr.id, state: 'error', msg: '❌ No hay chat activo — abre o crea uno primero' })
       return
     }
 
     setReviewingId(pr.id)
+    setReviewFeedback({ prId: pr.id, state: 'sending', msg: '⏳ Enviando revisión al chat…' })
     try {
       // Prompt configurable desde Config (sub-tab PRs) + URLs de referencia
       var rawPrompt = loadStr(STORAGE_PR_REVIEW_PROMPT) || PR_REVIEW_DEFAULT
@@ -1138,15 +1145,23 @@ function PRsTab({ githubToken, webhookUrl }) {
         text += '\n\nURLs de referencia del proyecto:\n' + refList.map(function (u) { return '- ' + u }).join('\n')
       }
 
-      host.request('prompt.submit', {
+      // await: si el RPC falla el catch lo atrapa y el feedback cambia a error
+      var res = await host.request('prompt.submit', {
         session_id: sid,
         text: text,
       })
+      // host.request puede devolver undefined si el RPC no tiene response body
+      if (res && res.error) throw new Error(res.error.message || 'RPC error')
       host.notify('🔍 Revisión enviada — el asistente procesará el PR')
+      setReviewFeedback({ prId: pr.id, state: 'sent', msg: '✅ Revisión enviada — revisa el chat activo' })
     } catch (err) {
-      host.notifyError('Error al enviar revisión: ' + err.message)
+      host.notifyError('Error al enviar revisión: ' + (err.message || String(err)))
+      setReviewFeedback({ prId: pr.id, state: 'error', msg: '❌ Error al enviar: ' + (err.message || String(err)) })
     } finally {
-      setReviewingId(null)
+      // Mantener el spinner ⏳ visible un momento (antes se limpiaba en el
+      // mismo tick y el usuario no veía nada). El feedback se auto-limpia.
+      setTimeout(function () { setReviewingId(null) }, 1800)
+      setTimeout(function () { setReviewFeedback(null) }, 6000)
     }
   }
 
@@ -1385,6 +1400,20 @@ function PRsTab({ githubToken, webhookUrl }) {
               children: reviewing ? '⏳' : jsx(Icon, { path: ICON_MAGNIFYING_GLASS, className: 'size-3.5 shrink-0' }),
             }),
           ],
+        }),
+        // Feedback visible de la lupa 🔍 (sending/sent/error) — dura 6s
+        reviewFeedback && reviewFeedback.prId === pr.id && jsx('div', {
+          style: {
+            padding: '2px 12px 6px 28px',
+            fontSize: 10,
+            fontWeight: 500,
+            lineHeight: '14px',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            color: reviewFeedback.state === 'error' ? '#f85149' : (reviewFeedback.state === 'sent' ? '#3fb950' : '#58a6ff'),
+          },
+          children: reviewFeedback.msg,
         }),
         // Aprobar con comentario
         isWriting && writing.action === 'approve' && jsxs('div', {
@@ -4256,32 +4285,28 @@ function StatusTab({ hubToken }) {
     if (item.type !== 'track') return null
 
     var isActioning = actioningId === (item.id + '-' + item.status)
-    var label, promptBuilder, color, actionIcon
+    var label, promptBuilder, color
 
     switch (item.status) {
       case 'backlog':
-        label = 'Shape'
+        label = 'Validar'
         promptBuilder = buildBacklogPrompt
-        color = '#6e7681'
-        actionIcon = ICON_CLIPBOARD_DOCUMENT_LIST
+        color = '#8b949e'
         break
       case 'shaping':
-        label = 'Plan'
+        label = 'Definir'
         promptBuilder = buildShapingPrompt
         color = '#58a6ff'
-        actionIcon = ICON_PENCIL_SQUARE
         break
       case 'todo':
-        label = 'Execute'
+        label = 'Ejecutar'
         promptBuilder = buildTodoPrompt
         color = '#3fb950'
-        actionIcon = ICON_WRENCH
         break
       case 'in_progress':
-        label = 'Continue'
+        label = 'Entregar'
         promptBuilder = buildTodoPrompt
         color = '#f59e0b'
-        actionIcon = ICON_ARROW_PATH
         break
       default:
         return null
@@ -4293,9 +4318,23 @@ function StatusTab({ hubToken }) {
         if (!isActioning) actionTrack(item, promptBuilder)
       },
       disabled: isActioning,
-      style: btnStyle(color, isActioning),
+      style: {
+        writingMode: 'vertical-rl',
+        textOrientation: 'mixed',
+        fontSize: 8,
+        fontWeight: 700,
+        padding: '8px 3px',
+        letterSpacing: '1.5px',
+        textTransform: 'uppercase',
+        border: 'none',
+        borderRadius: '0 3px 3px 0',
+        background: color + '22',
+        color: isActioning ? '#555' : color,
+        cursor: isActioning ? 'default' : 'pointer',
+        flexShrink: 0,
+      },
       title: isActioning ? 'Enviando...' : label + ': ' + item.code,
-      children: isActioning ? '⏳' : jsx('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'center' }, children: [jsx(Icon, { path: actionIcon, className: 'size-3.5 shrink-0' }), ' ' + label] }),
+      children: label,
     }, 'action')
   }
 
@@ -4305,18 +4344,20 @@ function StatusTab({ hubToken }) {
     var statusColor = STATUS_COLORS[item.status] || '#8b949e'
 
     return jsxs('div', {
+      style: { display: 'flex', alignItems: 'stretch', borderBottom: '1px solid #1a1a1a', backgroundColor: isSelected ? '#1a1a2a' : 'transparent' },
+      onMouseEnter: function (e) { e.currentTarget.style.backgroundColor = '#2a2a2a' },
+      onMouseLeave: function (e) { e.currentTarget.style.backgroundColor = isSelected ? '#1a1a2a' : 'transparent' },
       children: [
+        btn,
         jsx('div', {
           onClick: function () { openDetail(item) },
           style: {
             display: 'flex',
             alignItems: 'center',
-            borderBottom: '1px solid #1a1a1a',
             cursor: 'pointer',
-            backgroundColor: isSelected ? '#1a1a2a' : 'transparent',
+            flex: 1,
+            minWidth: 0,
           },
-          onMouseEnter: function (e) { e.currentTarget.style.backgroundColor = '#2a2a2a' },
-          onMouseLeave: function (e) { e.currentTarget.style.backgroundColor = isSelected ? '#1a1a2a' : 'transparent' },
           children: [
             jsx('div', {
               style: {
@@ -4373,7 +4414,6 @@ function StatusTab({ hubToken }) {
                 ],
               }),
             }),
-            btn,
           ],
         }),
       ],
@@ -4615,12 +4655,15 @@ function StatusTab({ hubToken }) {
                 ],
               }),
 
-              // Link to Hub
-              jsx('a', {
-                href: itemUrl(detail),
-                target: '_blank', rel: 'noopener noreferrer',
-                style: { display: 'block', marginTop: 10, textAlign: 'center', fontSize: 11, color: '#58a6ff', textDecoration: 'none', padding: '6px', borderRadius: 4, backgroundColor: '#0d1117', border: '1px solid #30363d' },
-                children: jsx('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'center' }, children: [jsx(Icon, { path: ICON_ARROW_UP_RIGHT, className: 'size-3 shrink-0' }), ' Abrir en Hub — ' + (detail.code || detail.id)] }),
+              // Sticky link to Hub
+              jsx('div', {
+                style: { position: 'sticky', bottom: 0, padding: '10px 12px 8px', background: 'linear-gradient(to top, #0d1117 60%, transparent)', zIndex: 10, marginTop: 10 },
+                children: jsx('a', {
+                  href: itemUrl(detail),
+                  target: '_blank', rel: 'noopener noreferrer',
+                  style: { display: 'block', textAlign: 'center', fontSize: 11, color: '#58a6ff', textDecoration: 'none', padding: '8px', borderRadius: 6, backgroundColor: '#161b22', border: '1px solid #30363d', fontWeight: 500 },
+                  children: jsx('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6, justifyContent: 'center' }, children: [jsx(Icon, { path: ICON_ARROW_UP_RIGHT, className: 'size-3 shrink-0' }), ' Abrir en Hub — ' + (detail.code || detail.id)] }),
+                }),
               }),
             ],
           }),
