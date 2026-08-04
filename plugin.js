@@ -4480,9 +4480,9 @@ function StatusTab({ hubToken }) {
           lastFetch.current = 0
         },
       }) : selectedId ? [
-        // Detail view header
+        // Detail view header — sticky top
         jsx('div', {
-          style: { padding: '6px 12px', borderBottom: '1px solid #333', display: 'flex', alignItems: 'center', gap: 6 },
+          style: { padding: '6px 12px', borderBottom: '1px solid #333', display: 'flex', alignItems: 'center', gap: 6, position: 'sticky', top: 0, zIndex: 10, backgroundColor: '#161616' },
           children: jsx('button', {
             onClick: function () { setSelectedId(null); setDetail(null) },
             style: { background: 'none', border: 'none', color: '#58a6ff', cursor: 'pointer', fontSize: 11, fontWeight: 600, padding: 0 },
