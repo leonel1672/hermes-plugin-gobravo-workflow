@@ -213,12 +213,12 @@ function fmt(n) {
 }
 
 function fmt1(n) {
-  if (n === 0 || n) return n.toFixed(1)
+  if (n === 0 || n) return Number(n).toFixed(1)
   return '-'
 }
 
 function pct(n) {
-  if (n === 0 || n) return n.toFixed(1) + '%'
+  if (n === 0 || n) return Number(n).toFixed(1) + '%'
   return '-'
 }
 
@@ -243,11 +243,16 @@ function mdToHtml(text) {
     return '%%MERMAID' + idx + '%%'
   })
 
-  // 2. Extract other code blocks
+  // 2. Extract other code blocks (escapa HTML — el escape global del paso 3
+  //    ya no alcanza al content porque quedó en placeholder)
   var codeBlocks = []
   h = h.replace(/```(\w*)\n?([\s\S]*?)```/g, function (_, lang, code) {
     var idx = codeBlocks.length
-    codeBlocks.push('<pre style="background:#111;padding:8px;border-radius:4px;font-size:11px;overflow-x:auto;margin:4px 0"><code>' + code.trim() + '</code></pre>')
+    var escaped = code.trim()
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+    codeBlocks.push('<pre style="background:#111;padding:8px;border-radius:4px;font-size:11px;overflow-x:auto;margin:4px 0"><code>' + escaped + '</code></pre>')
     return '%%CB' + idx + '%%'
   })
 
@@ -1050,8 +1055,13 @@ function PRsTab({ githubToken, webhookUrl }) {
     setUserComments(null)
     var pr = commentsDetail && commentsDetail.pr
     if (!pr || !githubToken) return
-    var comments = await fetchUnresolvedThreads(githubToken, pr)
-    setUserComments(comments || [])
+    try {
+      var comments = await fetchUnresolvedThreads(githubToken, pr)
+      setUserComments(comments || [])
+    } catch (err) {
+      setUserComments([])
+      host.notifyError('Error al cargar comentarios: ' + (err.message || String(err)))
+    }
   }
 
   function analyzeWith(modelSlug, commentsArr) {
@@ -3544,6 +3554,26 @@ function Pill({ onClick }) {
 function App() {
   const [open, setOpen] = useState(false)
   const [tab, setTab] = useState('stats')
+
+  // Captura global para el botón "Copiar" de los bloques mermaid (renderizado
+  // vía dangerouslySetInnerHTML en mdToHtml, así que no tiene handler React).
+  useEffect(function () {
+    function handleClickCapt(e) {
+      var btn = e.target && e.target.closest && e.target.closest('.hub-copy-btn')
+      if (!btn) return
+      var block = btn.closest('.hub-mermaid-block')
+      var code = block ? (block.getAttribute('data-code') || '') : ''
+      if (!code) return
+      e.preventDefault()
+      e.stopPropagation()
+      navigator.clipboard.writeText(code)
+        .then(function () { host.notify('✅ Código copiado') })
+        .catch(function () { host.notifyError('❌ No se pudo copiar') })
+    }
+    document.addEventListener('click', handleClickCapt, true)
+    return function () { document.removeEventListener('click', handleClickCapt, true) }
+  }, [])
+
   const [hubToken, setHubToken] = useState(function () { return loadStr(STORAGE_HUB_TOKEN) })
   const [githubToken, setGithubToken] = useState(function () { return loadStr(STORAGE_GITHUB_TOKEN) })
   const [webhookUrl, setWebhookUrl] = useState(function () { return loadStr(STORAGE_WEBHOOK_URL) })
