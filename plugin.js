@@ -4345,7 +4345,7 @@ function StatusTab({ hubToken }) {
     var statusColor = STATUS_COLORS[item.status] || '#8b949e'
 
     return jsxs('div', {
-      style: { display: 'flex', alignItems: 'center', borderBottom: '1px solid #1a1a1a', backgroundColor: isSelected ? '#1a1a2a' : 'transparent' },
+      style: { display: 'flex', alignItems: 'center', borderBottom: '1px solid #1a1a1a', backgroundColor: isSelected ? '#1a1a2a' : 'transparent', paddingLeft: 12 },
       onMouseEnter: function (e) { e.currentTarget.style.backgroundColor = '#2a2a2a' },
       onMouseLeave: function (e) { e.currentTarget.style.backgroundColor = isSelected ? '#1a1a2a' : 'transparent' },
       children: [
