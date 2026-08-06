@@ -4175,6 +4175,7 @@ async function getDetail(token, id) {
   return mcpCall(token, 'tracker', 'get_workitem', {
     id: id,
     include_content: true,
+    children: true,
   })
 }
 
@@ -4317,10 +4318,53 @@ function StatusTab({ hubToken }) {
   var collapsed = _r[0]
   var setCollapsed = _r[1]
 
-  function toggleCollapsed(status) {
+  // Submenu de tasks hijas: ids expandidos + cache de children por track
+  var _s = useState(function () { return new Set() })
+  var expandedChildren = _s[0]
+  var setExpandedChildren = _s[1]
+
+  var _t = useState({})
+  var childrenCache = _t[0]
+  var setChildrenCache = _t[1]
+
+  var _u = useState(null)
+  var childrenLoading = _u[0]
+  var setChildrenLoading = _u[1]
+
+  var toggleCollapsed = function (status) {
     var next = {}
     next[status] = !collapsed[status]
     setCollapsed(Object.assign({}, collapsed, next))
+  }
+
+  // Fetch de tasks hijas (on-demand, children: true)
+  function toggleChildren(item) {
+    var id = item.id
+    var next = new Set(expandedChildren)
+    if (next.has(id)) {
+      next.delete(id)
+      setExpandedChildren(next)
+      return
+    }
+    next.add(id)
+    setExpandedChildren(next)
+
+    if (childrenCache[id]) return
+
+    setChildrenLoading(id)
+    getDetail(hubToken, id)
+      .then(function (d) {
+        var kids = (d && d.children) || []
+        setChildrenCache(function (prev) {
+          var n = Object.assign({}, prev)
+          n[id] = kids
+          return n
+        })
+        setChildrenLoading(null)
+      })
+      .catch(function () {
+        setChildrenLoading(null)
+      })
   }
 
   var _q = useState(false)
@@ -4372,6 +4416,29 @@ function StatusTab({ hubToken }) {
           name: profile.name || profile.display_name || profile.email || 'Usuario',
           error: null,
         })
+
+        // Pre-cargar children de los tracks (en paralelo) para saber cuáles tienen tasks hijas
+        // y poder pintar el chevron solo en esos. Los tracks sin hijos no muestran chevron.
+        var trackIds = items
+          .filter(function (i) { return i.type === 'track' && !childrenCache[i.id] })
+          .map(function (i) { return i.id })
+
+        if (trackIds.length > 0) {
+          trackIds.forEach(function (id) {
+            getDetail(hubToken, id)
+              .then(function (d) {
+                var kids = (d && d.children) || []
+                setChildrenCache(function (prev) {
+                  var n = Object.assign({}, prev)
+                  n[id] = kids
+                  return n
+                })
+              })
+              .catch(function () {
+                // Si falla, dejar sin cache — el chevron no se pinta
+              })
+          })
+        }
       })
       .catch(function (err) {
         var msg = String(err.message || err)
@@ -4655,82 +4722,188 @@ function StatusTab({ hubToken }) {
     var btn = actionButton(item)
     var isSelected = selectedId === item.id
     var statusColor = STATUS_COLORS[item.status] || '#8b949e'
+    var isExpanded = expandedChildren.has(item.id)
+    var children = childrenCache[item.id]
+    var isLoadingChildren = childrenLoading === item.id
+    var hasChildren = !!(children && children.length > 0)
+    var isTrack = item.type === 'track'
 
-    return jsxs('div', {
-      style: { display: 'flex', alignItems: 'center', borderBottom: '1px solid #1a1a1a', backgroundColor: isSelected ? '#1a1a2a' : 'transparent', paddingLeft: 12 },
-      onMouseEnter: function (e) { e.currentTarget.style.backgroundColor = '#2a2a2a' },
-      onMouseLeave: function (e) { e.currentTarget.style.backgroundColor = isSelected ? '#1a1a2a' : 'transparent' },
-      children: [
-        btn,
-        jsx('div', {
-          onClick: function () { openDetail(item) },
-          style: {
-            display: 'flex',
-            alignItems: 'center',
-            cursor: 'pointer',
-            flex: 1,
-            minWidth: 0,
-          },
-          children: [
-            jsx('div', {
+    // El chevron solo se pinta si el track TIENE tasks hijas confirmadas
+    // (o está expandido/cargando tras un click). Sin hijos → sin chevron.
+    var showChevron = isTrack && (hasChildren || isExpanded || isLoadingChildren)
+
+    var chevron = null
+    if (showChevron) {
+      chevron = jsx('button', {
+        onClick: function (e) {
+          e.preventDefault()
+          e.stopPropagation()
+          toggleChildren(item)
+        },
+        title: 'Ver tasks hijas',
+        style: {
+          background: 'none', border: 'none', color: isExpanded ? '#58a6ff' : '#8b949e',
+          cursor: 'pointer', fontSize: 10, padding: '4px 6px', borderRadius: 4, flexShrink: 0,
+        },
+        children: isLoadingChildren ? '⏳' : (isExpanded ? '▼' : '▶'),
+      })
+    }
+
+    // Submenu de tasks hijas (debajo de la card del track)
+    var submenu = null
+    if (isExpanded) {
+      var rows = []
+      if (isLoadingChildren && !children) {
+        rows.push(jsx('div', {
+          style: { padding: '6px 12px', fontSize: 10, color: '#888' },
+          children: '⏳ Cargando tasks hijas...',
+        }, 'children-loading'))
+      } else {
+        var kids = children || []
+        if (kids.length === 0) {
+          rows.push(jsx('div', {
+            style: { padding: '6px 12px', fontSize: 10, color: '#666' },
+            children: 'Sin tasks hijas',
+          }, 'children-empty'))
+        } else {
+          for (var ci = 0; ci < kids.length; ci++) {
+            var kid = kids[ci]
+            var kidColor = STATUS_COLORS[kid.status] || '#8b949e'
+            rows.push(jsxs('div', {
+              onClick: function (k) { return function () { openDetail(k) } }(kid),
               style: {
-                flex: 1,
-                padding: '8px 12px 8px 8px',
-                minWidth: 0,
+                display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px 5px 8px',
+                fontSize: 11, cursor: 'pointer', borderTop: '1px solid #1c1c1c',
               },
-              children: jsxs('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 8 },
-                children: [
-                  jsxs('div', { style: { flex: 1, minWidth: 0 },
-                    children: [
-                      jsx('div', {
-                        style: {
-                          fontSize: 12,
-                          fontWeight: 500,
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                        },
-                        children: item.name,
-                      }),
-                      jsxs('div', {
-                        style: {
-                          fontSize: 11,
-                          color: '#888',
-                          marginTop: 2,
-                          display: 'flex',
-                          gap: 6,
-                          alignItems: 'center',
-                        },
-                        children: [
-                          jsx('span', { style: { color: '#58a6ff' }, children: item.code || '' }),
-                          jsx('span', {
-                            style: {
-                              fontSize: 10,
-                              padding: '1px 8px',
-                              borderRadius: 999,
-                              border: '1px solid ' + statusColor,
-                              color: statusColor,
-                              flexShrink: 0,
-                              fontWeight: 500,
-                              lineHeight: '14px',
-                            },
-                            children: statusText(item.status),
-                          }, 'status-chip'),
-                          item.due_date && jsx('span', {
-                            style: { color: new Date(item.due_date) < new Date() ? '#ef4444' : '#888', display: 'inline-flex', alignItems: 'center', gap: 4 },
-                            children: [jsx(Icon, { path: ICON_CALENDAR, className: 'size-3 shrink-0' }), ' ' + timeAgo(item.due_date)],
-                          }),
-                        ],
-                      }),
-                    ],
-                  }),
-                ],
+              onMouseEnter: function (e) { e.currentTarget.style.backgroundColor = '#1a1f2a' },
+              onMouseLeave: function (e) { e.currentTarget.style.backgroundColor = 'transparent' },
+              children: [
+                jsx('span', { style: { width: 5, height: 5, borderRadius: '50%', backgroundColor: kidColor, flexShrink: 0 } }),
+                jsx('span', { style: { color: '#58a6ff', flexShrink: 0, fontSize: 10 }, children: kid.code || '' }),
+                jsx('span', { style: { flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: '#bbb' }, children: kid.name }),
+                jsx('span', {
+                  style: { fontSize: 9, padding: '0 6px', borderRadius: 999, border: '1px solid ' + kidColor, color: kidColor, flexShrink: 0 },
+                  children: statusText(kid.status),
+                }),
+                kid.due_date && jsx('span', { style: { color: '#666', fontSize: 10, flexShrink: 0 }, children: timeAgo(kid.due_date) }),
+              ],
+            }, 'kid-' + (kid.id || ci)))
+          }
+        }
+      }
+      submenu = jsxs('div', {
+        style: {
+          backgroundColor: '#101418', borderLeft: '2px solid #58a6ff',
+          marginLeft: 22, padding: '4px 0',
+        },
+        children: [
+          jsxs('div', {
+            style: {
+              padding: '6px 12px 4px', fontSize: 9, color: '#6b7280',
+              textTransform: 'uppercase', letterSpacing: '.04em',
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            },
+            children: [
+              jsx('span', { children: 'Tasks hijas (' + ((children || []).length) + ')' }),
+              jsx('button', {
+                onClick: function (e) {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setChildrenCache(function (prev) {
+                    var n = Object.assign({}, prev)
+                    delete n[item.id]
+                    return n
+                  })
+                  toggleChildren(item)
+                },
+                style: { background: 'none', border: 'none', color: '#58a6ff', cursor: 'pointer', fontSize: 9, textTransform: 'none', letterSpacing: 0, padding: 0 },
+                children: '↻ recargar',
               }),
-            }),
-          ],
-        }),
-      ],
-    }, item.id)
+            ],
+          }),
+        ].concat(rows),
+      })
+    }
+
+    return jsxs('div', { children: [
+      jsxs('div', {
+        style: { display: 'flex', alignItems: 'center', borderBottom: '1px solid #1a1a1a', backgroundColor: isSelected ? '#1a1a2a' : 'transparent', paddingLeft: 12 },
+        onMouseEnter: function (e) { e.currentTarget.style.backgroundColor = '#2a2a2a' },
+        onMouseLeave: function (e) { e.currentTarget.style.backgroundColor = isSelected ? '#1a1a2a' : 'transparent' },
+        children: [
+          chevron,
+          btn,
+          jsx('div', {
+            onClick: function () { openDetail(item) },
+            style: {
+              display: 'flex',
+              alignItems: 'center',
+              cursor: 'pointer',
+              flex: 1,
+              minWidth: 0,
+            },
+            children: [
+              jsx('div', {
+                style: {
+                  flex: 1,
+                  padding: '8px 12px 8px 8px',
+                  minWidth: 0,
+                },
+                children: jsxs('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 8 },
+                  children: [
+                    jsxs('div', { style: { flex: 1, minWidth: 0 },
+                      children: [
+                        jsx('div', {
+                          style: {
+                            fontSize: 12,
+                            fontWeight: 500,
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                          },
+                          children: item.name,
+                        }),
+                        jsxs('div', {
+                          style: {
+                            fontSize: 11,
+                            color: '#888',
+                            marginTop: 2,
+                            display: 'flex',
+                            gap: 6,
+                            alignItems: 'center',
+                          },
+                          children: [
+                            jsx('span', { style: { color: '#58a6ff' }, children: item.code || '' }),
+                            jsx('span', {
+                              style: {
+                                fontSize: 10,
+                                padding: '1px 8px',
+                                borderRadius: 999,
+                                border: '1px solid ' + statusColor,
+                                color: statusColor,
+                                flexShrink: 0,
+                                fontWeight: 500,
+                                lineHeight: '14px',
+                              },
+                              children: statusText(item.status),
+                            }, 'status-chip'),
+                            item.due_date && jsx('span', {
+                              style: { color: new Date(item.due_date) < new Date() ? '#ef4444' : '#888', display: 'inline-flex', alignItems: 'center', gap: 4 },
+                              children: [jsx(Icon, { path: ICON_CALENDAR, className: 'size-3 shrink-0' }), ' ' + timeAgo(item.due_date)],
+                            }),
+                          ],
+                        }),
+                      ],
+                    }),
+                  ],
+                }),
+              }),
+            ],
+          }),
+        ],
+      }, item.id),
+      submenu,
+    ] })
   }
 
   // ── Render ──────────────────────────────────────────────────────
