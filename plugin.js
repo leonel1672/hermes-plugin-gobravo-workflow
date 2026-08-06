@@ -25,10 +25,15 @@ const STORAGE_PR_REVIEW_PROMPT = `hermes-plugin-${ID}-pr-review-prompt`
 const STORAGE_PR_REVIEW_REFS = `hermes-plugin-${ID}-pr-review-refs`
 const STORAGE_PR_REVIEW_MODEL = `hermes-plugin-${ID}-pr-review-model`
 const STORAGE_PR_REVIEW_PROVIDER = `hermes-plugin-${ID}-pr-review-provider`
-const PR_REVIEW_DEFAULT = 'Revisa este PR: {URL}\n\n1. Obtén el diff completo del PR (gh pr diff o git diff).\n2. Analiza línea por línea buscando: bugs, edge cases, seguridad, performance, convenciones de Elixir.\n3. NO publiques un resumen global. Los comentarios van INLINE, en la línea exacta donde viste el problema.\n4. Muestra TODOS los hallazgos al usuario primero (formato: archivo:línea — problema — sugerencia).\n5. El usuario confirma uno por uno. Solo cuando confirme, publica ese comentario inline en GitHub (gh api o REST).\n6. Formato del comentario: ### [emoji] file:line — título (en español, sin firma "Hermes Agent").\n7. Si NO encontraste problemas, informa que todo está bien.\n8. Si todo está bien O después de publicar los comentarios confirmados, pide autorización al usuario para hacer APPROVE del PR.\n9. NO apruebes sin confirmación explícita del usuario.\n10. Toma en cuenta las URLs de referencia del proyecto.'
+const STORAGE_TRACK_QA_PROMPT = `hermes-plugin-${ID}-track-qa-prompt`
+const STORAGE_TRACK_QA_REFS = `hermes-plugin-${ID}-track-qa-refs`
+const STORAGE_TRACK_QA_MODEL = `hermes-plugin-${ID}-track-qa-model`
+const STORAGE_TRACK_QA_PROVIDER = `hermes-plugin-${ID}-track-qa-provider`
+const PR_REVIEW_DEFAULT = 'Revisa este PR: {URL}\n\n1. Obtén el diff completo del PR (gh pr diff o git diff).\n2. Determina el proyecto (¿hay mix.exs? → Elixir; repo core vs alv vs rtd-api).\n3. Verifica que la rama siga el formato <tipo>/TRACKER-TRAC-<ID>.\n4. Verifica que el PR tenga las secciones obligatorias: Contexto, Cambios, Demo (si aplica), Criterios de aceptación. Los criterios deben ser escenarios verificables — rechaza "Funciona bien" o "Tests pasan".\n5. Analiza línea por línea buscando: bugs, edge cases, seguridad, performance, convenciones de Elixir.\n6. NO publiques un resumen global. Los comentarios van INLINE, en la línea exacta donde viste el problema.\n7. Muestra TODOS los hallazgos al usuario primero (formato: archivo:línea — problema — sugerencia).\n8. El usuario confirma uno por uno. Solo cuando confirme, publica ese comentario inline en GitHub (gh api o REST).\n9. Formato del comentario: ### [emoji] file:line — título (en español, sin firma "Hermes Agent").\n10. Si NO encontraste problemas, informa que todo está bien.\n11. Si todo está bien O después de publicar los comentarios confirmados, pide autorización al usuario para hacer APPROVE del PR.\n12. NO apruebes sin confirmación explícita del usuario.\n13. Toma en cuenta las URLs de referencia del proyecto.\n\nSi el PR es de core (Elixir umbrella):\n- Security: inputs sanitizados, SQL injection, secrets. Performance: N+1, memory leaks en LiveView.\n- Convenciones: @spec en todas las funciones (menos callbacks de behaviour), @doc solo en públicas.\n- Gettext: verifica que los strings visibles usen dgettext/2 — marca strings hardcodeadas o msgid eliminados.\n- NO tocar apps deprecated (products, people_service). Verifica que no bajó coverage ni se agregaron warnings.\n- Verifica que los gates CI del PR pasaron (no solo el diff): format, credo, hex.audit, deps, traducciones, tests.\n\nSi NO es core:\n- Aplica las convenciones del stack/proyecto correspondiente (README/AGENTS.md).'
 const PR_MESSAGE_DEFAULT = '👋 Team, cuando puedan échenme la mano con el code review de este PR:\n\n📌 {title}\n🔗 {url}\n#{number} · {repo}'
 const AI_PROMPT_DEFAULT = 'Analiza los {N} tickets del tracker (tasks y tracks) que se te dan y produce un DIAGNÓSTICO OPERATIVO de este squad. NO hagas un resumen genérico: identifica causas raíz y da acciones concretas.\n\nUsa exactamente este formato:\n\n## 1. Dolencias por dominio\nAgrupa los tickets por causa raíz / dominio real (pagos, asignación de clientes, mensajería, auth, UI, deuda técnica, datos, etc.). Para cada grupo:\n- **Nombre del dominio** — X de {N} tickets (YY%)\n- El patrón que los une (qué falla y por qué)\n- 2-3 códigos de ticket como evidencia\n\n## 2. Cuellos de botella\n- Tickets atascados en shaping/todo SIN due_date (indica cuánto llevan sin moverse)\n- Items de prioridad high que llevan mucho tiempo en backlog\n- Concentración de trabajo en un solo owner\n\n## 3. Riesgos de revenue / operación\n- Bugs en flujos críticos (cobro, pago, suspensión, asignación, mensajería)\n- Tickets de clientes que se repiten o se escalan\n- Items con due_date vencido o muy próximo\n\n## 4. Plan de acción (máximo 3 acciones)\nPara cada una: qué hacer, a quién asignar (según ownership detectado), y por qué va primero.\n\nReglas:\n- Cita códigos de ticket reales (TRACKER-...)\n- Distingue tracks (proyectos/épicas) de tasks (bugs/tickets puntuales)\n- Sé concreto y breve; no rellenes secciones vacías con "nada que reportar".'
 const HUB_BASE = 'https://hub.gobravo.io/api/v1'
+const TRACK_QA_DEFAULT = 'Eres un PM técnico. Diagnostica la calidad del track en backlog antes de que pase a shaping.\n\n1. Obtén los detalles del track usando get_workitem con el ID del track (content, comments, dependencies, activities).\n2. Consulta datos del squad para contextualizar:\n   - stats_wip_vs_capacity → ¿hay bandwidth disponible?\n   - stats_velocity → ¿cuánto absorbemos por periodo?\n   - stats_lead_cycle → ¿cuánto tardan tracks similares?\n3. Evalúa el checklist de calidad (7 criterios):\n   - Problema claro: ¿qué está roto/falta? ¿tiene evidencia?\n   - Alcance definido: ¿qué SÍ y qué NO incluye?\n   - Criterios de aceptación: ¿al menos 1 verificable?\n   - Dependencias: ¿depende de otros tracks/tasks?\n   - Owner asignado: ¿tiene responsable?\n   - Scope técnico: ¿los módulos/áreas mencionados existen en el repo?\n   - Sin ambigüedad: ¿evita "tal vez", "ver después"?\n4. Validación ligera del código: si el track menciona módulos o áreas, verifica que existan en el repo.\n5. Publica el diagnóstico como comentario usando add_comment con título "Diagnóstico de calidad".\n6. Después del diagnóstico, haz preguntas al usuario sobre lo que falta para mejorar el track:\n   - Criterios de aceptación faltantes\n   - Alcance no definido\n   - Dependencias sin identificar\n   - Cualquier ambigüedad detectada\n7. Cuando el usuario responda, actualiza la descripción del track usando edit_workitem con el contenido mejorado.\n8. NO cambies el estado del track — solo diagnostica, pregunta y mejora la descripción.\n9. El usuario luego decidirá si pasar a shaping con el botón "Validar".'
 
 // ── StatusTab constants ────────────────────────────────────────────
 const CACHE_TTL = 120_000
@@ -38,26 +43,26 @@ var DEFAULT_TRACK_RULES = {
   backlog_to_shaping: {
     provider: 'Token Gate',
     model: 'assistant',
-    rules: 'Eres un PM técnico. Haz un análisis a alto nivel del track para decidir si pasa a shaping.\n\n1. Obtén los detalles del track (content, comments, activities, dependencies).\n2. Analiza el código del repo SOLO si la descripción no es clara.\n3. Evalúa: ¿el problema está claro? ¿el alcance es viable? ¿hay objetivo medible? ¿hay dependencias críticas? ¿hay ambigüedad significativa?\n4. Pregunta el proyecto donde se trabajará.\n5. Realiza todas las preguntas necesarias para mejorar el análisis.\n6. Publica el análisis como comentario en el Hub con el título "Análisis inicial".\n7. Recomienda al usuario: pasar a shaping, quedarse en backlog (con nota de qué falta), o cancelar (con motivo).\n8. El usuario decide. Si confirma shaping: pasa el track a shaping y asigna el encargado (owner).\n9. Solo cambias el estado una vez, después de la confirmación del usuario.',
-    refs: ['https://github.com/resuelve/core/wiki'],
+    rules: 'Eres un PM técnico. Haz un análisis a alto nivel del track para decidir si pasa a shaping.\n\n1. Obtén los detalles del track (content, comments, activities, dependencies).\n2. Determina el proyecto: revisa el repo (¿hay mix.exs? → Elixir) o pregunta si no está claro.\n3. Analiza el código del repo SOLO si la descripción no es clara.\n4. Evalúa Definition of Ready (DoR):\n   - ¿Problema claro? ¿Quién lo reportó? ¿Cuál es el impacto?\n   - ¿Criterios de aceptación (mínimo 2-3 verificables)?\n   - ¿Alcance delimitado (qué SÍ y qué NO incluye)?\n   - ¿Requiere diseño aprobado o ADR? (cambio >2 apps, nueva tecnología, cambio de patrón de diseño)\n5. Pregunta el proyecto donde se trabajará si aún no está definido.\n6. Publica el análisis como comentario en el Hub con el título "Análisis inicial".\n7. Recomienda al usuario: pasar a shaping, quedarse en backlog (con nota de qué falta), o cancelar (con motivo).\n8. El usuario decide. Si confirma shaping: pasa el track a shaping y asigna el encargado (owner).\n9. Deja anotado en el "Análisis inicial" si el proyecto es core (Elixir) u otro stack, para que las fases siguientes apliquen las reglas correctas.',
+    refs: ['https://github.com/resuelve/core/wiki/Guia-de-Contribucion-y-Estandares', 'https://github.com/resuelve/core/wiki'],
   },
   shaping_to_todo: {
     provider: 'Token Gate',
     model: 'coder',
-    rules: 'Eres un developer Sr / Arquitecto especializado en Elixir. Haz un análisis técnico profundo del track basándote en el análisis inicial (comentario "Análisis inicial").\n\n1. Obtén los detalles del track (content, comments, activities, dependencies).\n2. Analiza el código del repo SIEMPRE — revisa los archivos implicados, schemas, flujos.\n3. Propón la solución arquitectónica. Si es compleja (multi-módulo, arquitectura), diagrama la solución.\n4. Desglosa el track en tasks hijas concretas que no excedan 1 día de trabajo cada una.\n5. Para cada task define: nombre descriptivo, descripción técnica, archivos/código a tocar, dependencias, riesgos y estrategia de mitigación.\n6. Identifica el orden óptimo de ejecución.\n7. Estima la fecha de entrega del track y de cada task.\n8. Haz las preguntas necesarias al usuario.\n9. Presenta el plan al usuario para revisión: tasks, fechas y orden de ejecución.\n10. El usuario confirma. Solo entonces: crea las tasks hijas en el Hub (status: todo, owner: tú), actualiza el track a todo, asigna due_date al track y a cada task.\n11. Agrega un comentario resumen con: análisis, tasks creadas (con IDs) y orden de ejecución.',
-    refs: ['https://github.com/resuelve/core/wiki'],
+    rules: 'Eres un developer Sr / Arquitecto especializado en Elixir. Haz un análisis técnico profundo del track basándote en el análisis inicial (comentario "Análisis inicial").\n\n1. Obtén los detalles del track (content, comments, activities, dependencies).\n2. Determina el proyecto (mix.exs → Elixir; repo core vs alv vs rtd-api).\n3. Analiza el código del repo SIEMPRE — revisa los archivos implicados, schemas, flujos.\n4. Propón la solución arquitectónica. Si es compleja (multi-módulo, arquitectura), diagrama la solución.\n5. Desglosa el track en tasks hijas concretas que no excedan 1 día de trabajo cada una y apunten a un PR revisable.\n6. Para cada task define: nombre descriptivo, descripción técnica, archivos/código a tocar, dependencias, riesgos y estrategia de mitigación. Anticipa la rama: <tipo>/TRACKER-TRAC-<ID>.\n7. Identifica el orden óptimo de ejecución.\n8. Estima la fecha de entrega del track y de cada task.\n9. Haz las preguntas necesarias al usuario.\n10. Presenta el plan al usuario para revisión: tasks, fechas y orden de ejecución.\n11. El usuario confirma. Solo entonces: crea las tasks hijas en el Hub (status: todo, owner: tú), actualiza el track a todo, asigna due_date al track y a cada task.\n12. Agrega un comentario resumen con: análisis, tasks creadas (con IDs) y orden de ejecución.\n\nSi el proyecto es core (Elixir umbrella):\n- Agrupa las tasks por app (ecosystem_web, interactions_service, nexus_hub, core, callman, etc.).\n- NO planifiques trabajo en apps deprecated (products, people_service).\n- Si el track implica cambios en >2 apps, nueva tecnología o cambio significativo de patrón: flag de ADR (requiere decisión de arquitectura).',
+    refs: ['https://github.com/resuelve/core/wiki/Guia-de-Contribucion-y-Estandares', 'https://github.com/resuelve/core/wiki'],
   },
   todo_to_in_progress: {
     provider: 'Token Gate',
     model: 'coder',
-    rules: 'Eres un developer Sr especializado en Elixir y orquestador de subagentes. Ejecuta las tasks hijas del track en el orden definido.\n\n1. Lee los detalles del track y sus tasks hijas.\n2. Si hay múltiples tasks independientes, usa subagentes en paralelo para ejecutarlas. Tú eres el orquestador: planificas, delegas y auditas.\n3. Cada subagente trabaja en una task aislada (archivos disjuntos, sin pisarse).\n4. Tú (orquestador) auditas TODO el trabajo de los subagentes antes de considerarlo listo: valida syntax, compile, format y coherencia.\n5. Antes de considerar una task como lista: valida compile + tests + format (mix compile, mix test, mix format --check-formatted).\n6. No uses IO.inspect en producción. Si debuggeas, revierte todo antes de terminar.\n7. NO hagas commit sin aprobación explícita del usuario. Muestra el diff/resumen y espera confirmación.\n8. Al completar cada task: márcala como done en el Hub y agrega un comentario con qué se hizo (archivos modificados, cambios clave).\n9. Reporta el progreso en el track (Hub): qué task se completó y qué sigue.\n10. Si encuentras un bloqueo (dependencia faltante, bug no relacionado, ambigüedad), detente y pregunta al usuario antes de continuar.\n11. Respeta las convenciones del proyecto (estilo Elixir, estructura umbrella, commits en español).\n12. Toma en cuenta las URLs de referencia del proyecto.',
-    refs: ['https://github.com/resuelve/core/wiki'],
+    rules: 'Eres un developer Sr especializado en Elixir y orquestador de subagentes. Ejecuta las tasks hijas del track en el orden definido.\n\n1. Lee los detalles del track y sus tasks hijas.\n2. Determina el proyecto (mix.exs → Elixir; repo core vs alv vs rtd-api).\n3. Crea la rama desde main: <tipo>/TRACKER-TRAC-<ID> exacto, en mayúsculas, sin descripción adicional.\n4. Si hay múltiples tasks independientes, usa subagentes en paralelo para ejecutarlas (archivos disjuntos, sin pisarse). Tú eres el orquestador: planificas, delegas y auditas TODO el trabajo de los subagentes (valida syntax, compile, format y coherencia).\n5. Commits en español descriptivo: "Se agregó...", "Se corrigió...", "Se actualizó...", "Se refactorizó...". Nada de "wip", "fix bug" o "update".\n6. NO hagas commit sin aprobación explícita del usuario. Muestra el diff/resumen y espera confirmación.\n7. Al completar cada task: márcala como done en el Hub y agrega un comentario con qué se hizo (archivos modificados, cambios clave).\n8. Reporta el progreso en el track (Hub): qué task se completó y qué sigue.\n9. Si encuentras un bloqueo (dependencia faltante, bug no relacionado, ambigüedad), detente y pregunta al usuario antes de continuar.\n\nSi el proyecto es core (Elixir umbrella):\n- Validación antes de considerar una task lista: mix format --check-formatted && mix credo && mix compile --force --warnings-as-errors && MIX_ENV=test mix test --max-failures 3.\n- Convenciones de código: @spec en todas las funciones (def y defp) excepto callbacks de behaviour; @doc solo en públicas (quitar @doc en defp); Alias order alfabético; line max 120; comentarios en español (términos técnicos consolidados en inglés).\n- TODO string visible al usuario pasa por dgettext/2 (Gettext). NO elimines msgid existentes ni rompas los .po. Si mueves/renombras un string, sincroniza los archivos .po.\n- NO uses IO.inspect en producción. Si debuggeas, revierte todo antes de terminar.\n- NO toques apps deprecated (products, people_service).\n- Cero warnings: mix compile --force --warnings-as-errors limpio.\n- Si introduces variables de entorno o feature flags nuevas, documéntalas en el PR.\n- Respeta las URLs de referencia del proyecto.',
+    refs: ['https://github.com/resuelve/core/wiki/Guia-de-Contribucion-y-Estandares', 'https://github.com/resuelve/core/wiki'],
   },
   in_progress_to_review: {
     provider: 'Token Gate',
     model: 'auxiliar',
-    rules: 'Eres un developer Sr especializado en Elixir. Esta es la fase de cierre del track.\n\n1. Verifica que todas las tasks hijas estén en done y con comentario de lo realizado.\n2. Haz una self-review completa del código: security, performance, edge cases, estilo, convenciones del proyecto.\n3. Verifica que compile + tests + format pasen.\n4. Prepara el PR en GitHub con: título descriptivo, descripción con el resumen del track y las tasks completadas.\n5. Prepara el mensaje del webhook (Google Chat) con el link del PR para avisar al equipo.\n6. Muestra todo al usuario (PR + webhook) y espera confirmación antes de publicar.\n7. Tras confirmación: crea el PR, envía el webhook.\n8. Pasa el track a in_review en el Hub.\n9. Agrega un comentario resumen en el track: qué se hizo, qué cambió, PR creado (con URL), tasks completadas.\n10. Toma en cuenta las URLs de referencia del proyecto.',
-    refs: ['https://github.com/resuelve/core/wiki'],
+    rules: 'Eres un developer Sr especializado en Elixir. Esta es la fase de cierre del track.\n\n1. Verifica que todas las tasks hijas estén en done y con comentario de lo realizado.\n2. Haz una self-review completa del código: security, performance, edge cases, estilo, convenciones del proyecto.\n3. Prepara el PR con la estructura obligatoria:\n   ## Contexto: track URL/número + problema en lenguaje de negocio (una oración).\n   ## Cambios: numerados, por módulo/componente.\n   ## Demo: video (mp4/mov/webm) si tiene UI o es bugfix con antes/después.\n   ## Screenshots: mínimo 1 si aplica UI.\n   ## Criterios de aceptación: escenarios verificables de qué probar para validar (NO "funciona bien", NO "tests pasan").\n4. Documenta en el body del PR si aplica: variables de entorno nuevas (y archivo donde agregarlas), feature flags (nombre, valor por ambiente, activo/inactivo), migraciones de BD requeridas.\n5. Prepara el mensaje del webhook (Google Chat) con el link del PR para avisar al equipo.\n6. Muestra todo al usuario (PR + webhook) y espera confirmación antes de publicar.\n7. Tras confirmación: crea el PR, envía el webhook.\n8. Pasa el track a in_review en el Hub.\n9. Agrega un comentario resumen en el track: qué se hizo, qué cambió, PR creado (con URL), tasks completadas.\n10. El PR requiere mínimo 2 aprobaciones antes de mergear: 1 del reviewer del equipo + 1 del SR técnico (el SR tiene veto técnico).\n\nSi el proyecto es core (Elixir umbrella):\n- Validación técnica antes de enviar el PR: mix format --check-formatted && mix credo && mix compile --force --warnings-as-errors && MIX_ENV=test mix test --max-failures 3.\n- Verifica los gates CI que aplicarán al mergear: mix hex.audit, mix deps.unlock --check-unused, traducciones (msgid no eliminados).\n- Verifica que no baje el coverage del app afectado (mix coveralls.html --app <app_afectada>).',
+    refs: ['https://github.com/resuelve/core/wiki/Guia-de-Contribucion-y-Estandares', 'https://github.com/resuelve/core/wiki'],
   },
 }
 const DEFAULT_STATUS_MODELS = {
@@ -163,6 +168,21 @@ function loadTrackRules() {
 }
 function saveTrackRules(rules) {
   try { saveStr(STORAGE_TRACK_RULES, JSON.stringify(rules)) } catch (e) {}
+}
+
+function loadTrackQA() {
+  return {
+    provider: loadStr(STORAGE_TRACK_QA_PROVIDER),
+    model: loadStr(STORAGE_TRACK_QA_MODEL),
+    prompt: loadStr(STORAGE_TRACK_QA_PROMPT),
+    refs: (function () { try { return JSON.parse(loadStr(STORAGE_TRACK_QA_REFS)) || [] } catch { return [] } })(),
+  }
+}
+function saveTrackQA(qa) {
+  if (qa.provider != null) saveStr(STORAGE_TRACK_QA_PROVIDER, qa.provider)
+  if (qa.model != null) saveStr(STORAGE_TRACK_QA_MODEL, qa.model)
+  if (qa.prompt != null) saveStr(STORAGE_TRACK_QA_PROMPT, qa.prompt)
+  if (qa.refs != null) saveStr(STORAGE_TRACK_QA_REFS, JSON.stringify(qa.refs))
 }
 
 // ── API helpers ────────────────────────────────────────────────────
@@ -594,6 +614,50 @@ function buildTodoPrompt(item, rules, refs) {
   ].join('\n'), rules, refs)
 }
 
+function buildTrackQAPrompt(item, rules, refs) {
+  return appendRules([
+    '## Diagnóstico de calidad — ' + item.code,
+    '',
+    '**Track:** ' + item.name,
+    '**Código:** ' + item.code,
+    '**Estado:** ' + item.status,
+    '**URL:** https://hub.gobravo.io/tracker/tracks/' + item.id,
+    '',
+    '### Instrucciones',
+    '',
+    'Eres un PM técnico. Diagnostica la calidad del track en backlog antes de que pase a shaping.',
+    '',
+    '1. **Obtén los detalles** del track usando `get_workitem` con ID `' + item.id + '` (content, comments, dependencies, activities).',
+    '2. **Consulta datos del squad** para contextualizar el diagnóstico:',
+    '   - `stats_wip_vs_capacity` → ¿hay bandwidth disponible?',
+    '   - `stats_velocity` → ¿cuánto absorbemos por periodo?',
+    '   - `stats_lead_cycle` → ¿cuánto tardan tracks similares (lead time y cycle time)?',
+    '3. **Evalúa el checklist de calidad** (7 criterios):',
+    '   - Problema claro: ¿qué está roto/falta? ¿tiene evidencia (Zendesk, ticket, bug report)?',
+    '   - Alcance definido: ¿qué SÍ y qué NO incluye?',
+    '   - Criterios de aceptación: ¿al menos 1 verificable?',
+    '   - Dependencias: ¿depende de otros tracks/tasks?',
+    '   - Owner asignado: ¿tiene responsable?',
+    '   - Scope técnico: ¿los módulos/áreas mencionados existen en el repo?',
+    '   - Sin ambigüedad: ¿evita "tal vez", "ver después", "no sé"?',
+    '4. **Validación ligera del código**: si el track menciona módulos o áreas específicas, verifica que existan en el repo con `search_files`.',
+    '5. **Publica el diagnóstico** como comentario en el Hub usando `add_comment` con título "Diagnóstico de calidad".',
+    '6. **Haz preguntas** al usuario sobre lo que falta para mejorar el track:',
+    '   - Criterios de aceptación faltantes',
+    '   - Alcance no definido',
+    '   - Dependencias sin identificar',
+    '   - Cualquier ambigüedad detectada',
+    '7. **Cuando el usuario responda**, actualiza la descripción del track usando `edit_workitem` con el contenido mejorado.',
+    '8. **NO cambies el estado** del track — solo diagnostica, pregunta y mejora la descripción.',
+    '9. El usuario luego decidirá si pasar a shaping con el botón "Validar" (backlog → shaping).',
+    '',
+    'Formato del diagnóstico:',
+    '| # | Criterio | Estado | Nota |',
+    '|---|---|---|---|',
+    'Con score final: X/7 y recomendación (listo / rework / cancelar).',
+  ].join('\n'), rules, refs)
+}
+
 // ── ModelConfigView ──────────────────────────────────────────────────
 
 // ── PR helpers ──────────────────────────────────────────────────────
@@ -912,6 +976,19 @@ function PRsTab({ githubToken, webhookUrl }) {
   var reviewFeedback = _kf[0] // { prId, state: 'sending'|'sent'|'error', msg }
   var setReviewFeedback = _kf[1]
 
+  // Feedback del botón Analizar en comentarios (✓ Enviado / ✗ Error)
+  var _cf = useState(null)
+  var commentFeedback = _cf[0] // { commentIdx, state: 'sent'|'error' }
+  var setCommentFeedback = _cf[1]
+
+  // Label del proveedor/modelo configurado para mostrar en el botón Analizar
+  var providerLabel = (function () {
+    var m = loadStr(STORAGE_PR_REVIEW_MODEL) || 'coder-sr'
+    var p = loadStr(STORAGE_PR_REVIEW_PROVIDER) || 'tokengate'
+    if (p === 'tokengate') return m
+    return p + '/' + m
+  })()
+
   var _l = useState(null)
   var writing = _l[0]
   var setWriting = _l[1]
@@ -1072,35 +1149,116 @@ function PRsTab({ githubToken, webhookUrl }) {
     }
   }
 
-  function analyzeWith(modelSlug, commentsArr) {
+  function analyzeComment(comment, pr, idx) {
     haptic('tap')
-    setAnalyzing(modelSlug)
+    setAnalyzing(idx)
+    setCommentFeedback(null)
     try {
-      if (host.state.model && host.state.model.set) {
-        try { host.state.model.set(modelSlug) } catch {}
-      }
       var sid = host.state.activeSessionId.get()
       if (!sid) {
         host.notifyError('❌ No hay sesión activa. Abre o crea un chat primero.')
+        setCommentFeedback({ commentIdx: idx, state: 'error' })
         return
       }
-      var prNum = commentsDetail && commentsDetail.pr ? commentsDetail.pr.number : '?'
-      var h = 'Analiza estos comentarios de code review en el PR #' + prNum + ':\n\n'
-      for (var i = 0; i < commentsArr.length; i++) {
-        var c = commentsArr[i]
-        h += '--- Comentario ' + (i + 1) + ' ---\n'
-        if (c.path) h += 'Archivo: ' + c.path + '\n'
-        h += 'Autor: ' + (c.author || '?') + '\n'
-        h += 'Comentario: ' + c.body + '\n\n'
+
+      // Leer provider/model/prompt de Config > PRs
+      var prov = loadStr(STORAGE_PR_REVIEW_PROVIDER) || 'tokengate'
+      var model = loadStr(STORAGE_PR_REVIEW_MODEL) || 'coder-sr'
+      var customPrompt = loadStr(STORAGE_PR_REVIEW_PROMPT)
+
+      // Aplicar proveedor/modelo vía cli.exec (mismo patrón de config-tab)
+      if (prov && model) {
+        host.request('cli.exec', { argv: ['config', 'set', 'auxiliary.review_pr.provider', prov] })
+          .catch(function () {})
+        host.request('cli.exec', { argv: ['config', 'set', 'auxiliary.review_pr.model', model] })
+          .catch(function () {})
       }
-      h += '\nResume los hallazgos principales y sugiere acciones concretas.'
-      host.request('prompt.submit', { session_id: sid, text: h })
+
+      // Construir prompt: si hay customPrompt se usa con variables, si no se usa un default inline
+      var text
+      if (customPrompt && customPrompt.trim()) {
+        text = customPrompt
+          .split('{number}').join(String(pr.number || ''))
+          .split('{path}').join(comment.path || '')
+          .split('{author}').join(comment.author || '?')
+          .split('{body}').join(comment.body || '')
+          .split('{URL}').join(pr.html_url || '')
+      } else {
+        text = 'Analiza este comentario de code review en el PR #' + (pr.number || '?') + ':\n\n' +
+          'Archivo: ' + (comment.path || 'n/a') + '\n' +
+          'Autor: @' + (comment.author || '?') + '\n' +
+          'Comentario: ' + (comment.body || '') + '\n\n' +
+          'PR: ' + (pr.html_url || '') + '\n\n' +
+          '1. Entiende el problema señalado.\n' +
+          '2. Revisa el código en el archivo mencionado (usa la URL del PR para ver el diff).\n' +
+          '3. Sugiere una solución concreta con código.\n' +
+          '4. Si el comentario tiene razón, explica cómo implementar el fix.\n' +
+          '5. Si el comentario es incorrecto, explica por qué.'
+      }
+
+      host.request('prompt.submit', { session_id: sid, text: text })
       host.notify('🔍 Análisis enviado al chat activo')
+      setCommentFeedback({ commentIdx: idx, state: 'sent' })
     } catch (err) {
-      host.notifyError('Error: ' + err.message)
+      host.notifyError('Error: ' + (err.message || String(err)))
+      setCommentFeedback({ commentIdx: idx, state: 'error' })
     } finally {
-      setAnalyzing(null)
+      setTimeout(function () { setAnalyzing(null) }, 1800)
+      setTimeout(function () { setCommentFeedback(null) }, 6000)
     }
+  }
+
+  function renderCommentCard(comment, pr, idx) {
+    var analyzingThis = analyzing === idx
+    return jsxs('div', {
+      style: { backgroundColor: '#141414', borderRadius: 4, marginBottom: 8, padding: 10, fontSize: 11 },
+      children: [
+        jsxs('div', {
+          style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+          children: [
+            comment.path && jsx('span', {
+              style: { color: '#58a6ff', fontWeight: 500, fontSize: 10, fontFamily: 'monospace' },
+              children: '📁 ' + comment.path,
+            }),
+            jsx('span', {
+              style: { color: comment.author === 'hubbot-reviewer' ? '#f59e0b' : '#888', fontWeight: 500, fontSize: 10 },
+              children: '@' + (comment.author || '?'),
+            }),
+          ],
+        }),
+        jsx('div', {
+          style: { color: '#ccc', whiteSpace: 'pre-wrap', lineHeight: 1.5, marginTop: 4, marginBottom: 6 },
+          children: comment.body,
+        }),
+        jsxs('div', {
+          style: { display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, borderTop: '1px solid #222', paddingTop: 6 },
+          children: [
+            commentFeedback && commentFeedback.commentIdx === idx && commentFeedback.state === 'sent' &&
+              jsx('span', { style: { fontSize: 9, fontWeight: 600, color: '#3fb950', display: 'inline-flex', alignItems: 'center', gap: 3 }, children: '✓ Enviado' }),
+            commentFeedback && commentFeedback.commentIdx === idx && commentFeedback.state === 'error' &&
+              jsx('span', { style: { fontSize: 9, fontWeight: 600, color: '#f85149', display: 'inline-flex', alignItems: 'center', gap: 3 }, children: '✗ Error' }),
+            jsx('button', {
+              onClick: function () { if (!analyzingThis) analyzeComment(comment, pr, idx) },
+              disabled: analyzingThis,
+              style: {
+                background: '#1a1a2e', color: analyzingThis ? '#555' : '#58a6ff',
+                border: '1px solid ' + (analyzingThis ? '#333' : '#2a3a5e'),
+                borderRadius: 3, padding: '2px 10px', cursor: analyzingThis ? 'default' : 'pointer',
+                fontSize: 9, fontWeight: 600, lineHeight: '14px',
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                opacity: analyzingThis ? 0.6 : 1,
+              },
+              children: analyzingThis
+                ? '⏳ Analizando...'
+                : jsxs('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 4 }, children: [
+                    jsx(Icon, { path: ICON_MAGNIFYING_GLASS, className: 'size-3 shrink-0' }),
+                    ' Analizar',
+                  ]}),
+            }),
+          ],
+        }),
+      ],
+    }, 'cmt' + idx)
   }
 
   // ── Acciones de PR ──
@@ -1480,6 +1638,122 @@ function PRsTab({ githubToken, webhookUrl }) {
             }),
           ],
         }),
+      ],
+    })
+  }
+
+  // ── Comments detail panel ─────────────────────────────────────────
+  if (commentsDetail) {
+    var cd = commentsDetail
+    var prAuthor = cd.pr.user && cd.pr.user.login || ''
+
+    // ── Drilldown: show actual comments per user ──
+    if (selectedUser) {
+      var filteredComments = userComments
+        ? userComments.filter(function (c) { return c.author === selectedUser })
+        : []
+
+      return jsxs('div', {
+        style: { padding: 0 },
+        children: [
+          jsx('div', {
+            style: {
+              padding: '6px 12px', borderBottom: '1px solid #333',
+              display: 'flex', alignItems: 'center', gap: 6,
+              position: 'sticky', top: 0, zIndex: 10,
+              backgroundColor: '#161616',
+            },
+            children: [
+              jsx('button', {
+                onClick: function () { setSelectedUser(null); setUserComments(null) },
+                style: { background: 'none', border: 'none', color: '#58a6ff', cursor: 'pointer', fontSize: 11, fontWeight: 600, padding: 0 },
+                children: '← Volver',
+              }),
+              jsx('span', { style: { fontSize: 11, color: '#888', marginLeft: 6 }, children: '👤 ' + selectedUser }),
+            ],
+          }),
+
+          userComments === null &&
+            jsx('div', { style: { padding: 20, textAlign: 'center', fontSize: 12, color: '#888' }, children: '⏳ Cargando comentarios...' }),
+
+          userComments && filteredComments.length > 0 &&
+            jsxs('div', { style: { padding: 10 }, children: [
+              jsx('div', {
+                style: { fontSize: 11, fontWeight: 600, color: '#888', marginBottom: 8 },
+                children: '💬 Comentarios (' + filteredComments.length + ')',
+              }),
+              jsx('div', {
+                children: filteredComments.map(function (c, idx) {
+                  return renderCommentCard(c, cd.pr, idx)
+                }),
+              }),
+            ]}),
+
+          userComments && filteredComments.length === 0 &&
+            jsx('div', { style: { padding: 20, textAlign: 'center', fontSize: 12, color: '#666' }, children: '🎉 No hay comentarios de ' + selectedUser }),
+        ],
+      })
+    }
+
+    // ── User list (summary by user) ──
+    return jsxs('div', {
+      style: { padding: 0 },
+      children: [
+        jsx('div', {
+          style: {
+            padding: '6px 12px', borderBottom: '1px solid #333',
+            display: 'flex', alignItems: 'center', gap: 6,
+            position: 'sticky', top: 0, zIndex: 10,
+            backgroundColor: '#161616',
+          },
+          children: [
+            jsx('button', {
+              onClick: function () { setCommentsDetail(null) },
+              style: { background: 'none', border: 'none', color: '#58a6ff', cursor: 'pointer', fontSize: 11, fontWeight: 600, padding: 0 },
+              children: '← Volver',
+            }),
+            jsx('span', { style: { fontSize: 11, color: '#888', marginLeft: 6, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }, children: '#' + cd.pr.number + ' — ' + cd.pr.title }),
+          ],
+        }),
+
+        jsxs('div', { style: { padding: 10 }, children: [
+          jsx('div', {
+            style: { fontSize: 11, fontWeight: 600, color: '#888', marginBottom: 8 },
+            children: '💬 Comentarios no resueltos (' + cd.total + ')',
+          }),
+          Object.keys(cd.byUser).length > 0 &&
+            jsx('div', {
+              // Excluir al autor del PR de la lista de revisores
+              children: Object.keys(cd.byUser).filter(function (u) { return u !== prAuthor }).sort(function (a, b) { return cd.byUser[b] - cd.byUser[a] }).map(function (user) {
+                return jsxs('button', {
+                  onClick: function () { handleUserClick(user) },
+                  style: {
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    width: '100%', padding: '6px 10px',
+                    backgroundColor: selectedUser === user ? '#1e3a5f' : '#141414',
+                    border: selectedUser === user ? '1px solid #58a6ff' : 'none',
+                    borderRadius: 4, marginBottom: 4, cursor: 'pointer', color: '#ddd', fontSize: 12,
+                  },
+                  children: [
+                    jsxs('div', {
+                      style: { display: 'flex', alignItems: 'center', gap: 6 },
+                      children: [
+                        jsx('span', { style: { fontSize: 14 }, children: '👤' }),
+                        jsx('span', { style: { fontSize: 12, color: '#ddd', fontWeight: 500 }, children: user }),
+                        jsx(Icon, { path: ICON_CHEVRON_RIGHT, className: 'size-3 shrink-0', style: { color: '#58a6ff' } }),
+                      ],
+                    }),
+                    jsx('span', {
+                      style: { fontSize: 13, fontWeight: 700, color: '#ef4444' },
+                      children: String(cd.byUser[user]),
+                    }),
+                  ],
+                }, user)
+              }),
+            }),
+          Object.keys(cd.byUser).length === 0 &&
+            jsx('div', { style: { padding: 8, textAlign: 'center', fontSize: 12, color: '#666' }, children: '🎉 No hay comentarios no resueltos' }),
+        ]}),
       ],
     })
   }
@@ -3901,6 +4175,7 @@ async function getDetail(token, id) {
   return mcpCall(token, 'tracker', 'get_workitem', {
     id: id,
     include_content: true,
+    children: true,
   })
 }
 
@@ -4043,10 +4318,40 @@ function StatusTab({ hubToken }) {
   var collapsed = _r[0]
   var setCollapsed = _r[1]
 
-  function toggleCollapsed(status) {
+  // Tasks hijas siempre visibles debajo del track (sin toggle)
+  var _s = useState({})
+  var childrenCache = _s[0]
+  var setChildrenCache = _s[1]
+
+  var _u = useState(null)
+  var childrenLoading = _u[0]
+  var setChildrenLoading = _u[1]
+
+  var toggleCollapsed = function (status) {
     var next = {}
     next[status] = !collapsed[status]
     setCollapsed(Object.assign({}, collapsed, next))
+  }
+
+  // Carga de tasks hijas (on-demand, children: true) — se muestran siempre
+  function loadChildren(item) {
+    var id = item.id
+    if (childrenCache[id] || childrenLoading === id) return
+
+    setChildrenLoading(id)
+    getDetail(hubToken, id)
+      .then(function (d) {
+        var kids = (d && d.children) || []
+        setChildrenCache(function (prev) {
+          var n = Object.assign({}, prev)
+          n[id] = kids
+          return n
+        })
+        setChildrenLoading(null)
+      })
+      .catch(function () {
+        setChildrenLoading(null)
+      })
   }
 
   var _q = useState(false)
@@ -4098,6 +4403,29 @@ function StatusTab({ hubToken }) {
           name: profile.name || profile.display_name || profile.email || 'Usuario',
           error: null,
         })
+
+        // Pre-cargar children de los tracks (en paralelo) para mostrarlos
+        // siempre debajo del track. Tracks sin hijos no muestran nada.
+        var trackIds = items
+          .filter(function (i) { return i.type === 'track' && !childrenCache[i.id] })
+          .map(function (i) { return i.id })
+
+        if (trackIds.length > 0) {
+          trackIds.forEach(function (id) {
+            getDetail(hubToken, id)
+              .then(function (d) {
+                var kids = (d && d.children) || []
+                setChildrenCache(function (prev) {
+                  var n = Object.assign({}, prev)
+                  n[id] = kids
+                  return n
+                })
+              })
+              .catch(function () {
+                // Si falla, dejar sin cache — el track simplemente no muestra tasks
+              })
+          })
+        }
       })
       .catch(function (err) {
         var msg = String(err.message || err)
@@ -4231,6 +4559,40 @@ function StatusTab({ hubToken }) {
     }
   }, [statusModels])
 
+  function actionTrackQA(item) {
+    var sid = host.state.activeSessionId.get()
+    if (!sid) {
+      host.notifyError('❌ No hay sesión activa. Abre o crea un chat primero.')
+      return
+    }
+    setActioningId(item.id + '-qa')
+    try {
+      var qaCfg = loadTrackQA()
+      var promptText = qaCfg.prompt || TRACK_QA_DEFAULT
+      var refs = qaCfg.refs || []
+      var prompt = buildTrackQAPrompt(item, promptText, refs)
+
+      if (qaCfg.provider && qaCfg.model) {
+        var providerSlug = (qaCfg.provider === 'Token Gate') ? 'tokengate' : qaCfg.provider
+        host.request('config.set', {
+          session_id: sid,
+          key: 'model',
+          value: qaCfg.model + ' --provider ' + providerSlug + ' --session',
+        })
+      }
+
+      host.request('prompt.submit', {
+        session_id: sid,
+        text: prompt,
+      })
+      host.notify('🔬 Diagnóstico enviado — el asistente analizará ' + item.code)
+    } catch (err) {
+      host.notifyError('Error: ' + err.message)
+    } finally {
+      setActioningId(null)
+    }
+  }
+
   function saveDescription() {
     if (!detail) return
     setSavingContent(true)
@@ -4347,82 +4709,139 @@ function StatusTab({ hubToken }) {
     var btn = actionButton(item)
     var isSelected = selectedId === item.id
     var statusColor = STATUS_COLORS[item.status] || '#8b949e'
+    var children = childrenCache[item.id]
+    var isLoadingChildren = childrenLoading === item.id
+    var hasChildren = !!(children && children.filter(function (c) { return c.status !== 'cancelled' }).length > 0)
+    var isTrack = item.type === 'track'
 
-    return jsxs('div', {
-      style: { display: 'flex', alignItems: 'center', borderBottom: '1px solid #1a1a1a', backgroundColor: isSelected ? '#1a1a2a' : 'transparent', paddingLeft: 12 },
-      onMouseEnter: function (e) { e.currentTarget.style.backgroundColor = '#2a2a2a' },
-      onMouseLeave: function (e) { e.currentTarget.style.backgroundColor = isSelected ? '#1a1a2a' : 'transparent' },
-      children: [
-        btn,
-        jsx('div', {
-          onClick: function () { openDetail(item) },
-          style: {
-            display: 'flex',
-            alignItems: 'center',
-            cursor: 'pointer',
-            flex: 1,
-            minWidth: 0,
-          },
-          children: [
-            jsx('div', {
-              style: {
-                flex: 1,
-                padding: '8px 12px 8px 8px',
-                minWidth: 0,
-              },
-              children: jsxs('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 8 },
-                children: [
-                  jsxs('div', { style: { flex: 1, minWidth: 0 },
-                    children: [
-                      jsx('div', {
-                        style: {
-                          fontSize: 12,
-                          fontWeight: 500,
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                        },
-                        children: item.name,
-                      }),
-                      jsxs('div', {
-                        style: {
-                          fontSize: 11,
-                          color: '#888',
-                          marginTop: 2,
-                          display: 'flex',
-                          gap: 6,
-                          alignItems: 'center',
-                        },
-                        children: [
-                          jsx('span', { style: { color: '#58a6ff' }, children: item.code || '' }),
-                          jsx('span', {
-                            style: {
-                              fontSize: 10,
-                              padding: '1px 8px',
-                              borderRadius: 999,
-                              border: '1px solid ' + statusColor,
-                              color: statusColor,
-                              flexShrink: 0,
-                              fontWeight: 500,
-                              lineHeight: '14px',
-                            },
-                            children: statusText(item.status),
-                          }, 'status-chip'),
-                          item.due_date && jsx('span', {
-                            style: { color: new Date(item.due_date) < new Date() ? '#ef4444' : '#888', display: 'inline-flex', alignItems: 'center', gap: 4 },
-                            children: [jsx(Icon, { path: ICON_CALENDAR, className: 'size-3 shrink-0' }), ' ' + timeAgo(item.due_date)],
-                          }),
-                        ],
-                      }),
-                    ],
-                  }),
-                ],
+    // Submenu de tasks hijas — siempre visible si el track tiene hijos.
+    // La precarga ocurre en loadData (al listar), aquí solo se renderiza.
+    var submenu = null
+    if (isTrack && (isLoadingChildren || hasChildren)) {
+      var rows = []
+      if (isLoadingChildren && !children) {
+        rows.push(jsx('div', {
+          style: { padding: '6px 12px 6px 20px', fontSize: 10, color: '#888' },
+          children: '⏳ Cargando tasks hijas...',
+        }, 'children-loading'))
+      } else {
+        var kids = children || []
+        for (var ci = 0; ci < kids.length; ci++) {
+          var kid = kids[ci]
+          // No pintar tasks canceladas
+          if (kid.status === 'cancelled') continue
+          var kidColor = STATUS_COLORS[kid.status] || '#8b949e'
+          rows.push(jsxs('div', {
+            onClick: function (k) { return function () { openDetail(k) } }(kid),
+            style: {
+              display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px 6px 14px', position: 'relative',
+              fontSize: 11, cursor: 'pointer',
+            },
+            onMouseEnter: function (e) { e.currentTarget.style.backgroundColor = '#1a2230' },
+            onMouseLeave: function (e) { e.currentTarget.style.backgroundColor = 'transparent' },
+            children: [
+              // horizontal branch connector
+              jsx('span', { style: { position: 'absolute', left: 0, top: '50%', width: 10, height: 1, backgroundColor: '#2d333b', flexShrink: 0 } }),
+              // rhombus dot
+              jsx('span', { style: { width: 7, height: 7, borderRadius: 2, backgroundColor: kidColor, flexShrink: 0, transform: 'rotate(45deg)' } }),
+              jsx('span', { style: { color: '#58a6ff', flexShrink: 0, fontSize: 10 }, children: kid.code || '' }),
+              jsx('span', { style: { flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: '#bbb' }, children: kid.name }),
+              jsx('span', {
+                style: { fontSize: 9, padding: '0 6px', borderRadius: 999, border: '1px solid ' + kidColor, color: kidColor, flexShrink: 0 },
+                children: statusText(kid.status),
               }),
-            }),
-          ],
-        }),
-      ],
-    }, item.id)
+              kid.due_date && jsx('span', { style: { color: '#666', fontSize: 10, flexShrink: 0 }, children: kid.due_date }),
+            ],
+          }, 'kid-' + (kid.id || ci)))
+        }
+      }
+      submenu = jsxs('div', {
+        style: {
+          backgroundColor: '#101418', marginLeft: 28, padding: '4px 0', position: 'relative',
+          borderLeft: '2px solid #2d333b',
+        },
+        children: [].concat(rows),
+      })
+    }
+
+    return jsxs('div', { children: [
+      jsxs('div', {
+        style: { display: 'flex', alignItems: 'center', borderBottom: '1px solid #1a1a1a', backgroundColor: isSelected ? '#1a1a2a' : 'transparent', paddingLeft: 12 },
+        onMouseEnter: function (e) { e.currentTarget.style.backgroundColor = '#2a2a2a' },
+        onMouseLeave: function (e) { e.currentTarget.style.backgroundColor = isSelected ? '#1a1a2a' : 'transparent' },
+        children: [
+          btn,
+          jsx('div', {
+            onClick: function () { openDetail(item) },
+            style: {
+              display: 'flex',
+              alignItems: 'center',
+              cursor: 'pointer',
+              flex: 1,
+              minWidth: 0,
+            },
+            children: [
+              jsx('div', {
+                style: {
+                  flex: 1,
+                  padding: '8px 12px 8px 8px',
+                  minWidth: 0,
+                },
+                children: jsxs('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 8 },
+                  children: [
+                    jsxs('div', { style: { flex: 1, minWidth: 0 },
+                      children: [
+                        jsx('div', {
+                          style: {
+                            fontSize: 12,
+                            fontWeight: 500,
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                          },
+                          children: item.name,
+                        }),
+                        jsxs('div', {
+                          style: {
+                            fontSize: 11,
+                            color: '#888',
+                            marginTop: 2,
+                            display: 'flex',
+                            gap: 6,
+                            alignItems: 'center',
+                          },
+                          children: [
+                            jsx('span', { style: { color: '#58a6ff' }, children: item.code || '' }),
+                            jsx('span', {
+                              style: {
+                                fontSize: 10,
+                                padding: '1px 8px',
+                                borderRadius: 999,
+                                border: '1px solid ' + statusColor,
+                                color: statusColor,
+                                flexShrink: 0,
+                                fontWeight: 500,
+                                lineHeight: '14px',
+                              },
+                              children: statusText(item.status),
+                            }, 'status-chip'),
+                            item.due_date && jsx('span', {
+                              style: { color: new Date(item.due_date) < new Date() ? '#ef4444' : '#888', display: 'inline-flex', alignItems: 'center', gap: 4 },
+                              children: [jsx(Icon, { path: ICON_CALENDAR, className: 'size-3 shrink-0' }), ' ' + timeAgo(item.due_date)],
+                            }),
+                          ],
+                        }),
+                      ],
+                    }),
+                  ],
+                }),
+              }),
+            ],
+          }),
+        ],
+      }, item.id),
+      submenu,
+    ] })
   }
 
   // ── Render ──────────────────────────────────────────────────────
@@ -4506,9 +4925,27 @@ function StatusTab({ hubToken }) {
             children: [
               // Header
               jsxs('div', {
-                style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 },
+                style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 },
                 children: [
                   jsx('span', { style: { color: '#58a6ff', fontSize: 13, fontWeight: 600 }, children: detail.code || detail.id }),
+                  detail.status === 'backlog' && detail.type === 'track'
+                    ? jsx('button', {
+                        onClick: function (e) {
+                          e.preventDefault(); e.stopPropagation()
+                          actionTrackQA(detail)
+                        },
+                        disabled: actioningId === detail.id + '-qa',
+                        style: {
+                          fontSize: 9, padding: '1px 8px', lineHeight: '14px',
+                          borderRadius: 4, border: '1px solid #8b5cf6',
+                          color: actioningId === detail.id + '-qa' ? '#555' : '#8b5cf6',
+                          background: 'transparent', cursor: actioningId === detail.id + '-qa' ? 'default' : 'pointer',
+                          display: 'inline-flex', alignItems: 'center', gap: 3, fontWeight: 600,
+                        },
+                        title: 'Diagnosticar calidad del track',
+                        children: actioningId === detail.id + '-qa' ? '⏳' : '🔬 QA',
+                      }, 'track-qa')
+                    : null,
                 ],
               }),
 
@@ -4837,6 +5274,24 @@ function ConfigTab({ hubToken, githubToken, webhookUrl, onSave }) {
   var _t = useState('tracks')
   var activeTab = _t[0]
   var setActiveTab = _t[1]
+
+  // Feedback inline de guardado
+  var _sf = useState(null)
+  var saveFeedback = _sf[0]
+  var setSaveFeedback = _sf[1]
+
+  function flashSaved(key) {
+    setSaveFeedback(key)
+    setTimeout(function () { setSaveFeedback(null) }, 2200)
+  }
+
+  function saveBadge(key) {
+    if (saveFeedback !== key) return null
+    return jsx('span', {
+      style: { fontSize: 9, fontWeight: 600, lineHeight: '14px', color: '#3fb950', display: 'inline-flex', alignItems: 'center', gap: 3 },
+      children: '\u2713 Guardado',
+    })
+  }
 
   // Catálogo real de proveedores/modelos (model.options del gateway)
   var _cat = useState(null)
@@ -5384,6 +5839,7 @@ function ConfigTab({ hubToken, githubToken, webhookUrl, onSave }) {
             style: { background: 'none', border: '1px solid #333', color: '#8b949e', borderRadius: 3, padding: '1px 8px', cursor: 'pointer', fontSize: 9, lineHeight: '14px', fontWeight: 600 },
             children: '↺ Restaurar prompt',
           }),
+          saveBadge('ai'),
           jsx('button', {
             onClick: handleSaveAI,
             style: { backgroundColor: '#238636', color: 'white', border: 'none', borderRadius: 3, padding: '1px 8px', cursor: 'pointer', fontSize: 9, fontWeight: 600, lineHeight: '14px' },
